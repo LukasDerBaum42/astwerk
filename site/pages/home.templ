@@ -1,0 +1,91 @@
+package pages
+
+import (
+	"github.com/LukasDerBaum42/astwerk/site/templates"
+	"github.com/LukasDerBaum42/astwerk/ssg"
+)
+
+templ Home(c ssg.Ctx) {
+	@templates.Layout(c, nil) {
+		<section class="hero">
+			<h1>astwerk</h1>
+			<p class="tagline">
+				A minimal, no-magic static site generator for Go&nbsp;+&nbsp;templ.
+				No Node.js, no JS build tooling. Optional client-side scripting via Go&nbsp;&rarr;&nbsp;WASM.
+			</p>
+			<pre class="install"><code>go get github.com/LukasDerBaum42/astwerk</code></pre>
+			<p class="cta">
+				<a class="button" href={ c.Link("docs/getting-started/") }>Get started</a>
+				<a class="button ghost" href={ c.Link("examples/") }>See it running</a>
+			</p>
+		</section>
+
+		<section class="law">
+			<h2>Design law</h2>
+			<blockquote>
+				Abstract only the repeating boilerplate. If a project needs something
+				the tree can&rsquo;t express, it falls back to plain Go — never a wall
+				it can&rsquo;t get past.
+			</blockquote>
+		</section>
+
+		<section>
+			<h2>The whole mechanism</h2>
+			<p>
+				You describe the output directory as a tree of <code>Node</code>s and
+				call <code>Build</code>. There is no config file, no convention
+				scanner, no code generation. That is the entire API surface for
+				generating a site.
+			</p>
+			@templates.CodeBlock(homeExample)
+			<p>
+				That writes <code>build/index.html</code>,
+				<code>build/docs/index.html</code>, copies <code>style/</code> in, and
+				compiles <code>scripts/</code> to WebAssembly.
+			</p>
+		</section>
+
+		<section>
+			<h2>What you get</h2>
+			<div class="cards">
+				@card("The tree walker", "ssg", "One function replaces hand-written page loops and scattered os.MkdirAll calls. Pages get their own path and locale handed to them.", c.Link("docs/the-node-tree/"))
+				@card("Markdown content", "content", "TOML front matter decoded into your own struct. Point Generate at a directory and get one page per file.", c.Link("docs/content-and-collections/"))
+				@card("Derived locales", "BuildLocales", "A locale subtree is generated from the base tree. You list only the pages that genuinely differ.", c.Link("docs/i18n/"))
+				@card("Go in the browser", "wasmwrap", "syscall/js made to feel like Go: query, style, events, fetch and canvas, with chainable calls.", c.Link("docs/wasmwrap/"))
+				@card("Reactive UI", "reactive", "Signals with automatic dependency tracking, fine-grained DOM bindings, keyed lists and a router.", c.Link("docs/reactive/"))
+				@card("Starter templates", "starter", "Thirteen copyable .templ files — layouts, collections, SEO, RSS. Copied, never imported.", c.Link("docs/starter-templates/"))
+			</div>
+		</section>
+
+		<section>
+			<h2>Not for you if…</h2>
+			<ul class="plain">
+				<li>You want a config file. Go struct literals are the configuration.</li>
+				<li>You want conventions to discover your content. You write the tree.</li>
+				<li>You want a virtual DOM. Bindings patch one property at a time.</li>
+				<li>You want a themes ecosystem. There is a folder of files you copy and edit.</li>
+			</ul>
+		</section>
+	}
+}
+
+templ card(title string, tag string, body string, href string) {
+	<a class="card" href={ href }>
+		<h3>{ title } <code>{ tag }</code></h3>
+		<p>{ body }</p>
+	</a>
+}
+
+const homeExample = `root := ssg.Node{
+	Title: "My Site",
+	Page:  ssg.Templ(views.Home),
+	Children: map[string]ssg.Node{
+		"docs":    {Title: "Docs", Generate: docPages},
+		"style":   {CopyFrom: "style"},
+		"scripts": {CompileFrom: "scripts"},
+	},
+}
+
+if err := ssg.Build(root, ssg.BuildOptions{Dev: dev}); err != nil {
+	log.Fatal(err)
+}`

@@ -1,0 +1,92 @@
+package templates
+
+import "github.com/LukasDerBaum42/astwerk/ssg"
+
+// NavItem is one entry in the sidebar or top nav.
+type NavItem struct {
+	Label string
+	Path  string // site-relative, no leading slash: "docs/the-node-tree/"
+}
+
+// Layout owns the page shell.
+//
+// Every URL goes through c.Asset or c.Link rather than being written as a
+// literal "/…", because this site is served from /astwerk/ on GitHub Pages. Get
+// that wrong and every stylesheet and link 404s once deployed.
+templ Layout(c ssg.Ctx, sidebar []NavItem) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ pageTitle(c.Title) }</title>
+			<link rel="icon" href={ c.Asset("public/favicon.svg") } type="image/svg+xml"/>
+			<link rel="stylesheet" href={ c.Asset("style/style.css") }/>
+			<link rel="stylesheet" href={ c.Asset("style/code.css") }/>
+			<link rel="canonical" href={ "https://lukasderbaum42.github.io" + c.URL() }/>
+			<meta name="description" content="astwerk — a minimal, no-magic static site generator for Go and templ."/>
+			<meta property="og:title" content={ pageTitle(c.Title) }/>
+			<meta property="og:type" content="website"/>
+		</head>
+		<body>
+			<a class="skip" href="#main">Skip to content</a>
+			<header class="topbar">
+				<a class="brand" href={ c.Link("") }>
+					<span class="mark">&#9683;</span> astwerk
+				</a>
+				<nav class="topnav">
+					<a href={ c.Link("docs/") } aria-current={ ariaCurrent(c.Path, "docs") }>Docs</a>
+					<a href={ c.Link("examples/") } aria-current={ ariaCurrent(c.Path, "examples") }>Examples</a>
+					<a href="https://pkg.go.dev/github.com/LukasDerBaum42/astwerk">API</a>
+					<a href="https://github.com/LukasDerBaum42/astwerk">GitHub</a>
+				</nav>
+			</header>
+			if len(sidebar) > 0 {
+				<div class="with-sidebar">
+					<aside class="sidebar">
+						<p class="sidebar-title">Documentation</p>
+						<nav>
+							for _, item := range sidebar {
+								if item.Path == c.Path {
+									<a href={ c.Link(item.Path) } class="active" aria-current="page">{ item.Label }</a>
+								} else {
+									<a href={ c.Link(item.Path) }>{ item.Label }</a>
+								}
+							}
+						</nav>
+					</aside>
+					<main id="main">
+						{ children... }
+					</main>
+				</div>
+			} else {
+				<main id="main" class="wide">
+					{ children... }
+				</main>
+			}
+			<footer class="footer">
+				<p>
+					astwerk is MIT licensed. This site is built with astwerk —
+					<a href="https://github.com/LukasDerBaum42/astwerk/tree/master/site">its own source</a>
+					is in the repo.
+				</p>
+			</footer>
+		</body>
+	</html>
+}
+
+func pageTitle(t string) string {
+	if t == "" || t == "astwerk" {
+		return "astwerk — a no-magic static site generator for Go"
+	}
+	return t + " — astwerk"
+}
+
+// ariaCurrent marks a top-nav section as current. templ renders an empty
+// attribute value as absent, so "" is the right "not current" answer.
+func ariaCurrent(path, section string) string {
+	if len(path) >= len(section) && path[:len(section)] == section {
+		return "true"
+	}
+	return ""
+}

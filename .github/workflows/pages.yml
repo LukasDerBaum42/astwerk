@@ -1,0 +1,54 @@
+name: Deploy site
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Pages deployment needs these; the defaults aren't enough.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a run finish rather than cancelling it mid-deploy, but don't queue more
+# than one pending run.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: site/go.sum
+
+      - uses: actions/configure-pages@v5
+
+      - name: Generate templates
+        working-directory: site
+        run: go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate
+
+      # -base must match where Pages serves this repo from. For a project site
+      # that is /<repo>; switch to -base "" if a custom domain is ever set up.
+      - name: Build
+        working-directory: site
+        run: go run . -base "/${{ github.event.repository.name }}"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  library:
+    name: Library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: go.sum
+
+      - name: Build and vet
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      # ssg and content run on the host; the reactive core has no build
+      # constraints so it does too.
+      - name: Test (host)
+        run: go test ./ssg/ ./content/ ./reactive/
+
+      # wasmwrap and reactive's DOM half need a JS runtime. go_js_wasm_exec
+      # drives them through node.
+      - name: Test (js/wasm)
+        run: |
+          export PATH="$PATH:$(go env GOROOT)/lib/wasm"
+          GOOS=js GOARCH=wasm go build ./...
+          GOOS=js GOARCH=wasm go vet ./...
+          GOOS=js GOARCH=wasm go test ./wasmwrap/ ./reactive/
+
+  site:
+    name: Site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: site/go.sum
+
+      # The site is a nested module with a replace pointing at the parent, so
+      # this builds it against the commit under test. A change that breaks the
+      # library's own documentation site fails here.
+      - name: Check generated templ is current
+        working-directory: site
+        run: |
+          go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate
+          if ! git diff --quiet -- views; then
+            echo "templ output is stale — run 'templ generate' in site/ and commit:"
+            git diff --stat -- views
+            exit 1
+          fi
+
+      - name: Vet
+        working-directory: site
+        run: go vet ./...
+
+      # Builds the site and walks every generated page, resolving each link
+      # against the directory it was emitted from. Catches a broken link, an
+      # absolute URL that would break under /astwerk/, and demo markup drifting
+      # out of sync with the selectors scripts/demo.go hydrates.
+      - name: Test site
+        working-directory: site
+        run: go test ./...

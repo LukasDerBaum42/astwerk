@@ -1,0 +1,12 @@
+package templates
+
+// CodeBlock renders a Go snippet with syntax highlighting.
+//
+// Highlighting happens at build time — chroma emits styled markup, so no
+// JavaScript highlighter ships to the browser. The docs pages get the same
+// treatment through goldmark's highlighting extension.
+templ CodeBlock(src string) {
+	<div class="code">
+		@templ.Raw(HighlightGo(src))
+	</div>
+}
