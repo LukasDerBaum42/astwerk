@@ -1,0 +1,55 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package meta
+
+// SEO carries the fields that drive social preview cards. They are the same
+// fields front matter usually already has, so a Generate func can fill this in
+// straight from content.Decode.
+type SEO struct {
+	Title       string
+	Description string
+	URL         string // absolute: "https://example.com/projects/thing/"
+	Image       string // absolute URL to a preview image; optional
+	Type        string // "website" or "article"; defaults to "website"
+	SiteName    string
+}
+
+// SEOHead renders description, Open Graph and Twitter meta tags.
+//
+// Goes inside BaseLayout's <head>. Absolute URLs are required — crawlers do not
+// resolve relative ones — which is why URL and Image are not derived from
+// Ctx.Path. Set a SiteURL constant and join it yourself.
+templ SEOHead(s SEO) {
+	if s.Description != "" {
+		<meta name="description" content={ s.Description }/>
+	}
+	<meta property="og:title" content={ s.Title }/>
+	<meta property="og:type" content={ ogType(s.Type) }/>
+	if s.Description != "" {
+		<meta property="og:description" content={ s.Description }/>
+	}
+	if s.URL != "" {
+		<meta property="og:url" content={ s.URL }/>
+		<link rel="canonical" href={ s.URL }/>
+	}
+	if s.SiteName != "" {
+		<meta property="og:site_name" content={ s.SiteName }/>
+	}
+	if s.Image != "" {
+		<meta property="og:image" content={ s.Image }/>
+		<meta name="twitter:card" content="summary_large_image"/>
+		<meta name="twitter:image" content={ s.Image }/>
+	} else {
+		<meta name="twitter:card" content="summary"/>
+	}
+	<meta name="twitter:title" content={ s.Title }/>
+	if s.Description != "" {
+		<meta name="twitter:description" content={ s.Description }/>
+	}
+}
+
+func ogType(t string) string {
+	if t == "" {
+		return "website"
+	}
+	return t
+}

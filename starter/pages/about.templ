@@ -1,0 +1,12 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package pages
+
+import "example.com/yoursite/layout"
+
+// About is a plain one-off page that needs no collection behind it.
+templ About(title string, path string, prefix string) {
+	@layout.BaseLayout(title, path, prefix) {
+		<h1>{ title }</h1>
+		<p>A couple of paragraphs about yourself.</p>
+	}
+}

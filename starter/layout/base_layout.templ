@@ -1,0 +1,52 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package layout
+
+// BaseLayout owns the html/head/body structure for every page.
+//
+// Content arrives through templ's children mechanism, so a page wraps its body
+// instead of passing it in as a parameter:
+//
+//	templ About(title, path, prefix string) {
+//		@layout.BaseLayout(title, path, prefix) {
+//			<h1>About</h1>
+//		}
+//	}
+//
+// The (title, path, prefix) triple is what ssg.Templ fills in, so a page written
+// this way drops straight into a Node:
+//
+//	"about": {Title: "About", Page: ssg.Templ(pages.About)},
+//
+// prefix is the locale URL prefix ("" or "/de"); path is the page's own path
+// relative to the site root ("about/", "de/projects/thing/").
+templ BaseLayout(title string, path string, prefix string) {
+	<!DOCTYPE html>
+	<html lang={ Lang(prefix) }>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="stylesheet" href="/style/style.css"/>
+			// Drop in meta.SEOHead(...) here once you want social preview cards.
+		</head>
+		<body>
+			@Nav(prefix, path)
+			<main>
+				{ children... }
+			</main>
+			@Footer(prefix)
+		</body>
+	</html>
+}
+
+// Lang maps a locale prefix to an html lang attribute. Extend it as you add
+// locales; the default is the language you write your base content in.
+func Lang(prefix string) string {
+	switch prefix {
+	case "":
+		return "en"
+	default:
+		// "/de" -> "de"
+		return prefix[1:]
+	}
+}

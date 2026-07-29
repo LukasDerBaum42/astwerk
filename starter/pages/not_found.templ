@@ -1,0 +1,27 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package pages
+
+import "example.com/yoursite/layout"
+
+// NotFound is the 404 page.
+//
+// GitHub Pages and most static hosts look for 404.html at the site root, which
+// is not a directory index — so wire it through Node.Files rather than
+// Node.Page:
+//
+//	root := ssg.Node{
+//		Page: ssg.Templ(pages.Home),
+//		Files: map[string]ssg.PageFunc{
+//			"404.html": ssg.Templ(pages.NotFound),
+//		},
+//	}
+//
+// Links here must be absolute: the page is served from whatever URL the visitor
+// mistyped, so relative links would resolve against the wrong directory.
+templ NotFound(title string, path string, prefix string) {
+	@layout.BaseLayout(title, path, prefix) {
+		<h1>404</h1>
+		<p>That page doesn't exist.</p>
+		<p><a href={ prefix + "/" }>Back to the home page</a></p>
+	}
+}

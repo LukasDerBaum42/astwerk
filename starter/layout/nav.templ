@@ -1,0 +1,45 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package layout
+
+// NavLink is one entry in the nav bar.
+type NavLink struct {
+	Label string
+	Path  string // relative to the site root, no leading slash: "projects/"
+}
+
+// Links is the nav bar's contents. Adding a page means adding a line here, not
+// editing markup in two places.
+var Links = []NavLink{
+	{Label: "Projects", Path: "projects/"},
+	{Label: "About", Path: "about/"},
+}
+
+// Nav renders the nav bar. prefix keeps every link inside the current locale;
+// path is the current page, used to mark the active link.
+templ Nav(prefix string, path string) {
+	<nav>
+		<a href={ prefix + "/" } class="brand">Your Name</a>
+		<div class="nav-links">
+			for _, link := range Links {
+				if strip(path, prefix) == link.Path {
+					<a href={ prefix + "/" + link.Path } aria-current="page">{ link.Label }</a>
+				} else {
+					<a href={ prefix + "/" + link.Path }>{ link.Label }</a>
+				}
+			}
+		</div>
+	</nav>
+}
+
+// strip removes the locale segment from a path so it can be compared against
+// the locale-independent entries in Links: "de/about/" -> "about/".
+func strip(path, prefix string) string {
+	if prefix == "" {
+		return path
+	}
+	code := prefix[1:] + "/" // "/de" -> "de/"
+	if len(path) >= len(code) && path[:len(code)] == code {
+		return path[len(code):]
+	}
+	return path
+}

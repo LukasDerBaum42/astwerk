@@ -1,0 +1,29 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package wasm
+
+// WasmScript loads a Go-compiled .wasm module.
+//
+// name is the base name of the build output, so a scripts/nav.go compiled by
+// ssg.CompileScripts into build/scripts/nav.wasm is loaded as
+// @wasm.WasmScript("nav").
+//
+// wasm_exec.js is Go's own glue, copied into the output directory by
+// CompileScripts alongside the .wasm file. It defines globalThis.Go, so it must
+// load before the module runs — hence the plain script tag, not a module import.
+//
+// The path travels in a data attribute rather than being interpolated into the
+// script body: templ treats script contents as raw text, so a { name } in there
+// would be emitted literally.
+templ WasmScript(name string) {
+	<script src="/scripts/wasm_exec.js"></script>
+	<script data-wasm={ "/scripts/" + name + ".wasm" }>
+		(() => {
+			// Read currentScript synchronously — it is null once a promise resolves.
+			const src = document.currentScript.dataset.wasm;
+			const go = new Go();
+			WebAssembly.instantiateStreaming(fetch(src), go.importObject)
+				.then(res => go.run(res.instance))
+				.catch(err => console.error("failed to start " + src, err));
+		})();
+	</script>
+}

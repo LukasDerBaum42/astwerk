@@ -1,0 +1,39 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package content
+
+import "example.com/yoursite/layout"
+
+// Tile is one card in a collection index. The href is just the slug, so it
+// resolves relative to the index page and stays correct inside a locale
+// subtree without any prefix threading.
+templ Tile(it Item) {
+	<a class="tile" href={ it.Slug + "/" }>
+		<h2>{ it.Title }</h2>
+		if it.Description != "" {
+			<p>{ it.Description }</p>
+		}
+		if len(it.Tags) > 0 {
+			@TagList(it.Tags)
+		}
+	</a>
+}
+
+// CollectionItem is the detail page for one entry.
+//
+// body is pre-rendered HTML — content.Page.HTML from the astwerk content
+// package — so it goes in through templ.Raw rather than being escaped.
+//
+//	out[slug] = ssg.Node{Title: fm.Title, Page: func(c ssg.Ctx) templ.Component {
+//		return content.CollectionItem(c.Title, c.Path, c.Prefix, p.HTML, fm.Tags)
+//	}}
+templ CollectionItem(title string, path string, prefix string, body string, tags []string) {
+	@layout.BaseLayout(title, path, prefix) {
+		<article class="prose">
+			<h1>{ title }</h1>
+			if len(tags) > 0 {
+				@TagList(tags)
+			}
+			@templ.Raw(body)
+		</article>
+	}
+}

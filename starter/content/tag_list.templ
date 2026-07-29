@@ -1,0 +1,17 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package content
+
+// TagList renders the tags or categories a piece of content carries.
+//
+// Front matter commonly has these and most sites eventually want a tag cloud or
+// a filter. This renders them as plain labels; make them links once you actually
+// generate per-tag index pages.
+templ TagList(tags []string) {
+	if len(tags) > 0 {
+		<ul class="tags">
+			for _, tag := range tags {
+				<li class="tag">{ tag }</li>
+			}
+		</ul>
+	}
+}

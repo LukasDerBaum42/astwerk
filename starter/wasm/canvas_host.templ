@@ -1,0 +1,24 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package wasm
+
+import "strconv"
+
+// CanvasHost pairs a sized <canvas> with the script that draws into it.
+//
+// "canvas plus wasm script" is common enough — games, visualisations, drawing
+// tools — to be worth one component instead of assembling the two pieces every
+// time.
+//
+// The width and height attributes set the drawing buffer; the CSS class sizes
+// the element on screen. Those are different things, and mixing them up is what
+// makes canvas drawings look blurry. Call wasmwrap's Canvas.FitToDisplay from
+// your script to reconcile them against the device pixel ratio.
+templ CanvasHost(id string, script string, width int, height int) {
+	<canvas
+		id={ id }
+		class="canvas-host"
+		width={ strconv.Itoa(width) }
+		height={ strconv.Itoa(height) }
+	></canvas>
+	@WasmScript(script)
+}

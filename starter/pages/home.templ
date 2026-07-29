@@ -1,0 +1,17 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package pages
+
+import "example.com/yoursite/layout"
+
+// Home is the site's front page. Fill this in immediately — it is meant as a
+// starting point, not something to keep.
+templ Home(title string, path string, prefix string) {
+	@layout.BaseLayout(title, path, prefix) {
+		<h1>Your Name</h1>
+		<p>One sentence on who you are and what this site is for.</p>
+		<ul>
+			<li><a href={ prefix + "/projects/" }>Projects</a></li>
+			<li><a href={ prefix + "/about/" }>About</a></li>
+		</ul>
+	}
+}

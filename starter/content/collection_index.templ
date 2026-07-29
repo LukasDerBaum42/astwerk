@@ -1,0 +1,36 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package content
+
+import "example.com/yoursite/layout"
+
+// Item is one entry in a collection index — a blog post, a project, a
+// changelog entry. Populate it from front matter in your Generate func.
+type Item struct {
+	Title       string
+	Description string
+	Slug        string   // link target, relative to the index page
+	Tags        []string // optional; drop TagList below if unused
+}
+
+// CollectionIndex renders a grid of tiles, each linking to its detail page.
+//
+// Blog posts, project portfolios, changelogs and photo galleries are all this
+// same shape, so this one component covers the "list" half of list + detail.
+//
+//	"projects": {Title: "Projects", Page: func(c ssg.Ctx) templ.Component {
+//		return content.CollectionIndex(c.Title, c.Path, c.Prefix, items)
+//	}},
+templ CollectionIndex(title string, path string, prefix string, items []Item) {
+	@layout.BaseLayout(title, path, prefix) {
+		<h1>{ title }</h1>
+		if len(items) == 0 {
+			<p>Nothing here yet.</p>
+		} else {
+			<div class="collection-grid">
+				for _, it := range items {
+					@Tile(it)
+				}
+			</div>
+		}
+	}
+}

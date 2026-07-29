@@ -1,0 +1,52 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package layout
+
+// Locale is one language offered by the site switcher.
+type Locale struct {
+	Label  string
+	Prefix string // "" for the default language, "/de" for others
+}
+
+// Locales drives the language switcher. Delete it and the switcher below if the
+// site is single-language.
+var Locales = []Locale{
+	{Label: "English", Prefix: ""},
+	{Label: "Deutsch", Prefix: "/de"},
+}
+
+// Social is one contact or profile link.
+type Social struct {
+	Label string
+	URL   string
+}
+
+var Socials = []Social{
+	{Label: "GitHub", URL: "https://github.com/"},
+}
+
+// Footer holds whatever genuinely repeats on every page: the copyright line, the
+// locale switcher, and contact links.
+//
+// The switcher links to the same page in another language by swapping the
+// prefix, which works because a locale subtree mirrors the base tree.
+templ Footer(prefix string) {
+	<footer>
+		<p>&copy; 2026 Your Name</p>
+		if len(Locales) > 1 {
+			<div class="locales">
+				for _, l := range Locales {
+					if l.Prefix == prefix {
+						<span aria-current="true">{ l.Label }</span>
+					} else {
+						<a href={ l.Prefix + "/" }>{ l.Label }</a>
+					}
+				}
+			</div>
+		}
+		<div class="socials">
+			for _, s := range Socials {
+				<a href={ s.URL } rel="me noopener" target="_blank">{ s.Label }</a>
+			}
+		</div>
+	</footer>
+}

@@ -1,0 +1,93 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package meta
+
+import (
+	"encoding/xml"
+	"strings"
+	"time"
+)
+
+// FeedItem is one entry in the feed.
+type FeedItem struct {
+	Title       string
+	Description string
+	URL         string // absolute
+	Published   time.Time
+}
+
+// Feed is a whole RSS channel.
+type Feed struct {
+	Title       string
+	Description string
+	URL         string // absolute site URL
+	Items       []FeedItem
+}
+
+// RSSFeed renders the feed.
+//
+// Wire it up through Node.Files, since a feed is not a directory index:
+//
+//	Files: map[string]ssg.PageFunc{
+//		"rss.xml": func(ssg.Ctx) templ.Component { return meta.RSSFeed(feed) },
+//	}
+//
+// The XML is marshalled by encoding/xml rather than written out as markup,
+// deliberately. templ's parser is HTML-aware, and <link> is a void element in
+// HTML — written as markup it would self-close, producing a feed with no item
+// links at all. Marshalling sidesteps that and gets escaping right for free.
+templ RSSFeed(f Feed) {
+	@templ.Raw(f.XML())
+}
+
+// XML marshals the feed as an RSS 2.0 document.
+func (f Feed) XML() string {
+	type xmlItem struct {
+		Title       string `xml:"title"`
+		Link        string `xml:"link"`
+		Description string `xml:"description"`
+		GUID        string `xml:"guid"`
+		PubDate     string `xml:"pubDate,omitempty"`
+	}
+	type xmlChannel struct {
+		Title       string    `xml:"title"`
+		Link        string    `xml:"link"`
+		Description string    `xml:"description"`
+		Items       []xmlItem `xml:"item"`
+	}
+	type xmlRSS struct {
+		XMLName xml.Name   `xml:"rss"`
+		Version string     `xml:"version,attr"`
+		Channel xmlChannel `xml:"channel"`
+	}
+
+	doc := xmlRSS{Version: "2.0", Channel: xmlChannel{
+		Title:       f.Title,
+		Link:        f.URL,
+		Description: f.Description,
+	}}
+
+	for _, it := range f.Items {
+		x := xmlItem{
+			Title:       it.Title,
+			Link:        it.URL,
+			Description: it.Description,
+			GUID:        it.URL,
+		}
+		if !it.Published.IsZero() {
+			// RSS wants RFC 822; RFC1123Z is the compliant spelling Go offers.
+			x.PubDate = it.Published.Format(time.RFC1123Z)
+		}
+		doc.Channel.Items = append(doc.Channel.Items, x)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(xml.Header)
+	enc := xml.NewEncoder(&sb)
+	enc.Indent("", "  ")
+	if err := enc.Encode(doc); err != nil {
+		// Only reachable if the struct tags above are wrong, which is a bug
+		// here rather than bad input.
+		return xml.Header
+	}
+	return sb.String()
+}

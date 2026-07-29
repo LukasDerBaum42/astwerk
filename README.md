@@ -13,9 +13,15 @@ go get github.com/LukasDerBaum42/astwerk
 
 ## Status
 
-Implemented: §2 `ssg.Node`/`Build`, §3 `content`, §4 `BuildLocales`,
-§5 `CompileScripts`. Still to come: §6 `wasmwrap`, §7 `starter/`,
-§6a `wasmwrap/reactive`.
+All of §2–§7 is implemented.
+
+```
+ssg/       Node, Build, BuildLocales, CompileScripts
+content/   Load, LoadDir, Decode, Slugs
+wasmwrap/  DOM, style, events, timers, fetch, canvas   (js/wasm only)
+reactive/  signals, bindings, keyed lists, router, resources, templ interop
+starter/   13 copyable .templ files — see starter/README.md
+```
 
 ---
 
@@ -242,6 +248,61 @@ Two rules worth knowing:
 
 ---
 
+## `wasmwrap` — client-side scripting
+
+Optional. `syscall/js` made to feel like Go, for the browser half of a site.
+It exists only under `GOOS=js GOARCH=wasm`, so a script needs the matching
+constraint:
+
+```go
+//go:build js && wasm
+
+package main
+
+import "github.com/LukasDerBaum42/astwerk/wasmwrap"
+
+func main() {
+	nav := wasmwrap.Query("#nav")
+	wasmwrap.Query("#toggle").On("click", func(e wasmwrap.Event) {
+		e.PreventDefault()
+		nav.Class().Toggle("open")
+	})
+	select {} // keep the module alive for the handlers
+}
+```
+
+Everything that has nothing to return returns its receiver, so calls chain:
+
+```go
+wasmwrap.Query("#box").Style().Color("red").Display("block")
+```
+
+| | |
+| --- | --- |
+| `Query`, `QueryAll`, `Create`, `Body`, `Doc` | finding and making elements |
+| `Element` | `Append`, `Remove`, `Clone`, `Find`, `Parent`, `Children` |
+| | `Text`/`SetText`, `HTML`/`SetHTML`, `Attr`/`SetAttr`, `InputValue` |
+| | `Class()` → `Add`/`Remove`/`Toggle`/`Has` |
+| `Style()` | `Color`, `Display`, `Background`, `Size`, `Position`, `Hide`/`Show`, `Set` for anything else |
+| `On`, `Once` | event binding; both return an unsubscribe func |
+| `Event` | `PreventDefault`, `StopPropagation`, `Target`, `Key`, `Pos`, `PosIn` |
+| `SetTimeout`, `SetInterval` | return a cancel func |
+| `Fetch`, `FetchString` | blocking; no promise at the call site |
+| `AsCanvas()` | `Context2D`, `SetSize`, `FitToDisplay` |
+| `Ctx2D` | typed 2D drawing, plus `RequestAnimationFrame` for an animation loop |
+
+Two things worth knowing:
+
+- **A failed `Query` is inert, not a panic.** Check `Element.Exists()`; readers
+  like `Text()` return zero values rather than blowing up on a null node.
+- **`Fetch` blocks its goroutine**, which is fine from `main` — when every
+  goroutine blocks, the runtime returns control to the JS event loop. It is
+  *not* safe directly inside an event handler, which runs on a callback
+  goroutine the event loop is waiting on. Use `go func() { ... }()` there.
+
+Anything not modeled drops to `.Value()` and raw `syscall/js`, so the wrapper is
+a shortcut, never a dead end.
+
 ## Scripts
 
 `CompileFrom` runs `ssg.CompileScripts(srcDir, outDir)`:
@@ -259,6 +320,79 @@ The build constraint is required: without one, `go build ./...` at the project
 root would also try to compile the script for the host platform.
 
 ---
+
+## `reactive` — interactive UI
+
+Opt-in, on top of `wasmwrap`. Fine-grained rather than virtual-DOM: a binding
+updates exactly the property it owns, and a keyed list moves nodes rather than
+rebuilding them.
+
+```go
+count := reactive.NewSignal(0)
+doubled := reactive.Computed(func() int { return count.Get() * 2 })
+
+reactive.BindText(out, func() string { return strconv.Itoa(doubled.Get()) })
+reactive.On(btn, "click", func(wasmwrap.Event) {
+	count.Update(func(v int) int { return v + 1 })
+})
+```
+
+Dependencies are tracked, not declared: `Signal.Get` records a dependency on
+whatever effect is running, so an effect subscribes to exactly what it read last
+time. A branch not taken creates no dependency.
+
+| | |
+| --- | --- |
+| **State** | `Signal` (`Get`/`Set`/`Peek`/`Update`/`Subscribe`), `Computed` → `Memo`, `Effect`, `Batch`, `Untracked` |
+| **Lifecycle** | `OnCleanup`, `Scope`; effects nest and dispose their children |
+| **DOM** | `BindText`, `BindHTML`, `BindAttr`, `BindClass`, `BindStyle`, `BindShow` |
+| **Forms** | `BindValue`, `BindNumber`, `BindChecked` — two-way |
+| **Structure** | `BindWhen` (conditional subtree), `BindList` (keyed) |
+| **Routing** | `Router`, `Route`, `Params`, `Navigate`, `Replace`, `Path`, `InterceptLinks` |
+| **Async** | `Resource` with `Data`/`Err`/`Loading` signals, `FetchJSON[T]` |
+| **templ** | `Hydrate`, `HydrateAll`, `BindTempl`, `TemplElement`, `RenderTempl` |
+
+Routes match segment by segment — `/projects/:slug` captures, `/docs/*` catches
+the rest — and each view gets its own scope, so navigating away disposes its
+effects.
+
+### Using templ in the browser
+
+templ is pure Go, so it compiles to wasm and runs client-side unchanged. There
+are two ways to use it, and they are not equally good:
+
+**Bind to the markup astwerk already generated** — the recommended default.
+`ssg.Build` renders your templ at build time; a script attaches behaviour to it.
+Markup stays in one place, updates stay surgical, nothing renders twice.
+
+```go
+reactive.Hydrate("#counter", func(root wasmwrap.Element) {
+	reactive.BindText(root.Find("[data-count]"), func() string {
+		return strconv.Itoa(count.Get())
+	})
+	reactive.On(root.Find("[data-inc]"), "click", func(wasmwrap.Event) {
+		count.Update(func(v int) int { return v + 1 })
+	})
+})
+```
+
+**Re-render fragments client-side** — `BindTempl` runs a component in the browser
+and assigns the output as innerHTML. Convenient, but templ produces a *string*,
+so there is nothing to patch against: everything inside the target is destroyed
+and rebuilt, losing input focus, scroll position, selection and any handler bound
+inside. Fine for a display-only panel, wrong for anything interactive.
+
+```go
+reactive.BindTempl(preview, func() templ.Component {
+	return views.Markdown(source.Get())
+})
+```
+
+## `starter/`
+
+13 copyable `.templ` files — layouts, a list+detail collection, pages, wasm
+hosts, SEO and RSS. Not importable and not wired into `Build`: you copy them in
+and they become your code. See [starter/README.md](starter/README.md).
 
 ## Non-goals
 
