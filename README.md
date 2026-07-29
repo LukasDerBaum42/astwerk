@@ -11,6 +11,12 @@ can't get past.
 go get github.com/LukasDerBaum42/astwerk
 ```
 
+**[Documentation](https://lukasderbaum42.github.io/astwerk/)** ·
+[Examples](https://lukasderbaum42.github.io/astwerk/examples/) ·
+[API reference](https://pkg.go.dev/github.com/LukasDerBaum42/astwerk)
+
+The documentation site is built with astwerk, from [`site/`](site) in this repo.
+
 ## Status
 
 All of §2–§7 is implemented.
@@ -21,7 +27,12 @@ content/   Load, LoadDir, Decode, Slugs
 wasmwrap/  DOM, style, events, timers, fetch, canvas   (js/wasm only)
 reactive/  signals, bindings, keyed lists, router, resources, templ interop
 starter/   13 copyable .templ files — see starter/README.md
+site/      this project's docs site, a nested module (dogfooding + CI check)
 ```
+
+`astwerk-spec.md` is the original design sheet. Sections 2, 4, 6a and 9 describe
+API that has since changed — the README, the docs site and the source are
+current; the spec is a historical record.
 
 ---
 
@@ -92,13 +103,32 @@ making you retype it:
 
 ```go
 type Ctx struct {
-	Title  string // the node's Title
-	Path   string // "", "about/", "de/projects/dice-dungeon/"
-	Prefix string // "" or "/de" — the locale's URL prefix
-	Locale string // "" or "de"
+	Title    string // the node's Title
+	Path     string // "", "about/", "de/projects/dice-dungeon/"
+	Prefix   string // "" or "/de" — the locale's URL prefix
+	Locale   string // "" or "de"
+	Base     string // "" or "/astwerk" — the site's base path
+	Relative bool   // in-page URLs are relative to this page
 }
 
-func (c Ctx) URL() string // "/", "/about/", "/de/about/"
+func (c Ctx) URL() string               // absolute: canonical tags, feeds
+func (c Ctx) Asset(path string) string  // an asset, from this page
+func (c Ctx) Link(path string) string   // a page, locale-aware
+func (c Ctx) Rel() string               // Path without the locale segment
+func (c Ctx) InLocale(prefix string) string // this page in another language
+```
+
+Never write an absolute URL as a literal in a layout. A site served from a
+subdirectory — every GitHub project Pages site — resolves `/style/style.css`
+against the domain root, which is a different site. Set `RelativeURLs: true` and
+use `Asset`/`Link`, and one build then works off disk, at a localhost root, and
+under a subpath with no rebuild:
+
+```go
+ssg.Build(root, ssg.BuildOptions{
+	RelativeURLs: true,
+	BaseURL:      "/astwerk", // only Ctx.URL uses this
+})
 ```
 
 `Page` and every entry in `Files` is a `PageFunc`:

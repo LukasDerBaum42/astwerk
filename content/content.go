@@ -35,19 +35,55 @@ type Page struct {
 	raw string
 }
 
-// markdown renders with raw HTML passed through, so a page can drop into
+// DefaultMarkdown renders with raw HTML passed through, so a page can drop into
 // hand-written markup where markdown isn't enough.
-var markdown = goldmark.New(
-	goldmark.WithRendererOptions(html.WithUnsafe()),
-)
+//
+// Pass a different goldmark to [NewLoader] to add extensions — syntax
+// highlighting, tables, footnotes, anchored headings.
+func DefaultMarkdown() goldmark.Markdown {
+	return goldmark.New(goldmark.WithRendererOptions(html.WithUnsafe()))
+}
+
+// Loader reads markdown with a particular goldmark configuration. The
+// package-level [Load], [LoadDir] and [Parse] use [DefaultMarkdown]; make a
+// Loader when you need extensions:
+//
+//	md := goldmark.New(
+//		goldmark.WithExtensions(highlighting.NewHighlighting(...)),
+//		goldmark.WithRendererOptions(html.WithUnsafe()),
+//	)
+//	pages, err := content.NewLoader(md).LoadDir("content/docs")
+type Loader struct {
+	markdown goldmark.Markdown
+}
+
+// NewLoader returns a Loader using md. A nil md means [DefaultMarkdown].
+func NewLoader(md goldmark.Markdown) *Loader {
+	if md == nil {
+		md = DefaultMarkdown()
+	}
+	return &Loader{markdown: md}
+}
+
+var defaultLoader = NewLoader(nil)
 
 // Load reads one markdown file, splits its front matter and converts the body.
-func Load(path string) (Page, error) {
+func Load(path string) (Page, error) { return defaultLoader.Load(path) }
+
+// Parse does Load's work on an in-memory document.
+func Parse(src string) (Page, error) { return defaultLoader.Parse(src) }
+
+// LoadDir reads every *.md file directly inside dir (non-recursive) and returns
+// them keyed by file name without the extension — the page's slug.
+func LoadDir(dir string) (map[string]Page, error) { return defaultLoader.LoadDir(dir) }
+
+// Load reads one markdown file, splits its front matter and converts the body.
+func (l *Loader) Load(path string) (Page, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return Page{}, err
 	}
-	p, err := Parse(string(b))
+	p, err := l.Parse(string(b))
 	if err != nil {
 		return Page{}, fmt.Errorf("content: %s: %w", path, err)
 	}
@@ -55,7 +91,7 @@ func Load(path string) (Page, error) {
 }
 
 // Parse does Load's work on an in-memory document.
-func Parse(src string) (Page, error) {
+func (l *Loader) Parse(src string) (Page, error) {
 	raw, body := splitFrontMatter(src)
 
 	var meta map[string]any
@@ -66,7 +102,7 @@ func Parse(src string) (Page, error) {
 	}
 
 	var buf bytes.Buffer
-	if err := markdown.Convert([]byte(body), &buf); err != nil {
+	if err := l.markdown.Convert([]byte(body), &buf); err != nil {
 		return Page{}, fmt.Errorf("markdown: %w", err)
 	}
 
@@ -75,7 +111,7 @@ func Parse(src string) (Page, error) {
 
 // LoadDir reads every *.md file directly inside dir (non-recursive) and returns
 // them keyed by file name without the extension — the page's slug.
-func LoadDir(dir string) (map[string]Page, error) {
+func (l *Loader) LoadDir(dir string) (map[string]Page, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -86,7 +122,7 @@ func LoadDir(dir string) (map[string]Page, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
-		p, err := Load(filepath.Join(dir, e.Name()))
+		p, err := l.Load(filepath.Join(dir, e.Name()))
 		if err != nil {
 			return nil, err
 		}

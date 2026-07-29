@@ -53,7 +53,12 @@ func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions) 
 		loc = n.locale
 	}
 
-	ctx := Ctx{Title: n.Title, Path: sitePath}
+	ctx := Ctx{
+		Title:    n.Title,
+		Path:     sitePath,
+		Base:     opts.normalizeBase(),
+		Relative: opts.RelativeURLs,
+	}
 	if loc != nil {
 		ctx.Locale, ctx.Prefix = loc.code, loc.prefix
 	}
