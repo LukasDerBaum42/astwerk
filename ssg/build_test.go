@@ -2,6 +2,7 @@ package ssg
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,10 +14,21 @@ import (
 )
 
 // text is a minimal templ.Component so these tests don't need generated code.
-func text(s string) func() templ.Component {
-	return func() templ.Component {
+func text(s string) PageFunc {
+	return func(Ctx) templ.Component {
 		return templ.ComponentFunc(func(_ context.Context, w io.Writer) error {
 			_, err := io.WriteString(w, s)
+			return err
+		})
+	}
+}
+
+// ctxText renders the Ctx the walker handed the page, so tests can assert on it.
+func ctxText() PageFunc {
+	return func(c Ctx) templ.Component {
+		return templ.ComponentFunc(func(_ context.Context, w io.Writer) error {
+			_, err := fmt.Fprintf(w, "title=%q path=%q prefix=%q locale=%q url=%q",
+				c.Title, c.Path, c.Prefix, c.Locale, c.URL())
 			return err
 		})
 	}
@@ -89,7 +101,7 @@ func TestBuildFiles(t *testing.T) {
 
 	root := Node{
 		Page: text("home"),
-		Files: map[string]func() templ.Component{
+		Files: map[string]PageFunc{
 			"404.html":     text("not found"),
 			"feed/rss.xml": text("<rss/>"),
 		},
@@ -227,7 +239,7 @@ func TestBuildAcceptsTrailingSlashKeys(t *testing.T) {
 
 func TestBuildPropagatesRenderError(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "build")
-	boom := func() templ.Component {
+	boom := func(Ctx) templ.Component {
 		return templ.ComponentFunc(func(context.Context, io.Writer) error {
 			return io.ErrClosedPipe
 		})

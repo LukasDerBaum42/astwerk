@@ -21,7 +21,8 @@ const DefaultOutDir = "build"
 //
 // For each node, at its resolved output path p:
 //
-//  1. Page and Files are rendered into p.
+//  1. Page and Files are rendered into p, receiving a [Ctx] carrying the
+//     node's title, its site path, and its locale.
 //  2. CopyFrom is copied into p.
 //  3. CompileFrom is compiled into p.
 //  4. Generate is called and merged into Children (generated keys win).
@@ -41,10 +42,22 @@ func Build(root Node, opts BuildOptions) error {
 	if err := os.MkdirAll(opts.OutDir, 0755); err != nil {
 		return fmt.Errorf("ssg: create %s: %w", opts.OutDir, err)
 	}
-	return buildNode(root, opts.OutDir, opts)
+	return buildNode(root, opts.OutDir, "", nil, opts)
 }
 
-func buildNode(n Node, dir string, opts BuildOptions) error {
+// buildNode writes one node. dir is its output directory, sitePath its path
+// relative to the site root ("" at the root, "de/about/" deeper down), and loc
+// the locale it was mounted under, if any.
+func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions) error {
+	if n.locale != nil {
+		loc = n.locale
+	}
+
+	ctx := Ctx{Title: n.Title, Path: sitePath}
+	if loc != nil {
+		ctx.Locale, ctx.Prefix = loc.code, loc.prefix
+	}
+
 	if n.Page != nil || len(n.Files) > 0 || n.CopyFrom != "" || n.CompileFrom != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("ssg: create %s: %w", dir, err)
@@ -52,7 +65,7 @@ func buildNode(n Node, dir string, opts BuildOptions) error {
 	}
 
 	if n.Page != nil {
-		if err := renderFile(filepath.Join(dir, "index.html"), n.Page(), opts.Dev); err != nil {
+		if err := renderFile(filepath.Join(dir, "index.html"), n.Page(ctx), opts.Dev); err != nil {
 			return err
 		}
 	}
@@ -69,7 +82,7 @@ func buildNode(n Node, dir string, opts BuildOptions) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return fmt.Errorf("ssg: create %s: %w", filepath.Dir(path), err)
 		}
-		if err := renderFile(path, fn(), opts.Dev); err != nil {
+		if err := renderFile(path, fn(ctx), opts.Dev); err != nil {
 			return err
 		}
 	}
@@ -99,12 +112,18 @@ func buildNode(n Node, dir string, opts BuildOptions) error {
 		if err != nil {
 			return fmt.Errorf("ssg: child %q of %s: %w", key, dir, err)
 		}
-		if err := buildNode(children[key], sub, opts); err != nil {
+		if err := buildNode(children[key], sub, joinPath(sitePath, key), loc, opts); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// joinPath appends a tree key to a site path, keeping the trailing-slash form
+// pages are addressed by: "" + "about" -> "about/".
+func joinPath(base, key string) string {
+	return base + strings.Trim(filepath.ToSlash(key), "/") + "/"
 }
 
 // renderFile renders c into path, creating or truncating it per dev mode.

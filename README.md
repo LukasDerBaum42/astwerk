@@ -17,31 +17,37 @@ Implemented: §2 `ssg.Node`/`Build`, §3 `content`, §4 `BuildLocales`,
 §5 `CompileScripts`. Still to come: §6 `wasmwrap`, §7 `starter/`,
 §6a `wasmwrap/reactive`.
 
-## The whole mechanism
+---
 
-Describe the output filesystem as a tree, then build it:
+## The idea
+
+You describe the output directory as a tree of `Node`s. `Build` walks it and
+writes the site. That's the entire mechanism — there is no config file, no
+convention scanner, no code generation.
 
 ```go
+package main
+
+import (
+	"log"
+	"os"
+
+	"github.com/LukasDerBaum42/astwerk/ssg"
+	"myproject/src"
+)
+
 func main() {
 	dev := len(os.Args) > 1 && os.Args[1] == "--dev"
 
 	root := ssg.Node{
-		Page: RenderHome,
-		Files: map[string]func() templ.Component{
-			"404.html": RenderNotFound,
-		},
+		Title: "My Site",
+		Page:  ssg.Templ(src.HomePage),
 		Children: map[string]ssg.Node{
-			"links":    {Page: RenderLinks},
-			"about":    {Page: RenderAbout},
-			"projects": {Page: RenderProjectsIndex, Generate: GenerateProjects},
-			"style":    {CopyFrom: "style"},
-			"public":   {CopyFrom: "public"},
-			"scripts":  {CompileFrom: "scripts"},
+			"about":  {Title: "About", Page: ssg.Templ(src.About)},
+			"style":  {CopyFrom: "style"},
+			"public": {CopyFrom: "public"},
 		},
 	}
-	root = ssg.BuildLocales(root, []ssg.Locale{
-		{Code: "de", Prefix: "/de", Tree: GermanTree},
-	})
 
 	if err := ssg.Build(root, ssg.BuildOptions{Dev: dev}); err != nil {
 		log.Fatal(err)
@@ -49,29 +55,113 @@ func main() {
 }
 ```
 
-### `ssg.Node`
+That writes `build/index.html`, `build/about/index.html`, and copies `style/`
+and `public/` in.
 
-Every field is optional; the zero value just recurses into `Children`.
+---
 
-| Field | Effect at this node's directory |
-| --- | --- |
-| `Page` | renders `index.html` |
-| `Files` | renders extra files by name (`404.html`, `rss.xml`, `feed/rss.xml`) |
-| `Generate` | returns children computed at build time; merged into `Children`, generated keys win |
-| `CopyFrom` | copies a directory's contents in as-is |
-| `CompileFrom` | compiles a scripts directory in (see below) |
-| `Children` | static subdirectories, keyed by name |
+## `ssg.Node`
 
-`Build` visits children in sorted key order, so output is reproducible. Keys may
-contain slashes (`"assets/style"`) but may not escape the output directory.
+Every field is optional. The zero value does nothing but recurse into
+`Children`, so a node can exist purely to group.
 
-`BuildOptions.Dev` mirrors the usual `--dev` flag: skip the full clean of
-`OutDir` and overwrite files in place, so a running dev server keeps its handles.
+| Field | Type | Effect at this node's directory |
+| --- | --- | --- |
+| `Title` | `string` | passed to pages as `Ctx.Title` |
+| `Page` | `PageFunc` | renders `index.html` |
+| `Files` | `map[string]PageFunc` | renders extra files by name (`404.html`, `rss.xml`, `feed/rss.xml`) |
+| `Generate` | `func() map[string]Node` | children computed at build time, merged into `Children`; generated keys win |
+| `CopyFrom` | `string` | copies a directory's contents in as-is |
+| `CompileFrom` | `string` | compiles a scripts directory in |
+| `Children` | `map[string]Node` | subdirectories, keyed by name |
 
-## Content
+Children are visited in sorted key order, so output is reproducible and a
+failure always reports the same node first. Keys may contain slashes
+(`"assets/style"`) but may not escape the output directory.
 
-`content` reads markdown with TOML front matter between `+++` markers, and keeps
-front matter generic so each project decodes it into its own struct:
+### `Ctx` — what the walker tells your page
+
+The walker already knows where a page lives, so it tells the page instead of
+making you retype it:
+
+```go
+type Ctx struct {
+	Title  string // the node's Title
+	Path   string // "", "about/", "de/projects/dice-dungeon/"
+	Prefix string // "" or "/de" — the locale's URL prefix
+	Locale string // "" or "de"
+}
+
+func (c Ctx) URL() string // "/", "/about/", "/de/about/"
+```
+
+`Page` and every entry in `Files` is a `PageFunc`:
+
+```go
+type PageFunc func(Ctx) templ.Component
+```
+
+You rarely write one by hand. If your components take the usual
+`(title, path, prefix)` triple:
+
+```templ
+templ About(title string, path string, prefix string) {
+	@templates.BaseLayout(title, path, prefix) {
+		<h2>About me</h2>
+	}
+}
+```
+
+then `ssg.Templ` adapts them, and the walker fills in `path` and `prefix`:
+
+```go
+"about": {Title: "About", Page: ssg.Templ(src.About)},
+```
+
+For a component that takes nothing, use `ssg.Static(src.Home)`. For anything
+else — extra arguments, computed values — write the closure yourself:
+
+```go
+Page: func(c ssg.Ctx) templ.Component {
+	return src.Project(c.Title, c.Path, c.Prefix, tiles)
+},
+```
+
+### `BuildOptions`
+
+```go
+ssg.BuildOptions{
+	OutDir: "build", // default
+	Dev:    false,   // mirrors the usual --dev flag
+}
+```
+
+`Dev` skips the full clean of `OutDir` and overwrites files in place, so a
+running dev server keeps its inodes and open file handles.
+
+---
+
+## `content` — markdown with TOML front matter
+
+```go
+type Page struct {
+	Meta map[string]any // front matter between +++ markers
+	HTML string         // rendered markdown body
+}
+
+func Load(path string) (Page, error)
+func Parse(src string) (Page, error)
+func LoadDir(dir string) (map[string]Page, error) // non-recursive, *.md, keyed by slug
+func Slugs(pages map[string]Page) []string        // sorted keys
+func Decode[T any](p Page) (T, error)             // front matter into your struct
+```
+
+Front matter stays a generic map so each project decodes it into whatever
+struct its own layouts need. Markdown renders through goldmark with raw HTML
+passed through, so a page can drop into hand-written markup.
+
+Combined with `Generate`, that's a collection — one index page plus one page
+per file, with no path arithmetic anywhere:
 
 ```go
 type FrontMatter struct {
@@ -79,38 +169,82 @@ type FrontMatter struct {
 	Description string
 }
 
-func GenerateProjects() map[string]ssg.Node {
-	pages, err := content.LoadDir("content/projects")
+func projects(dir string) ssg.Node {
+	pages, err := content.LoadDir(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	out := map[string]ssg.Node{}
-	for _, slug := range content.Slugs(pages) { // sorted: map order would shuffle the index
-		p := pages[slug]
-		fm, _ := content.Decode[FrontMatter](p)
-		out[slug] = ssg.Node{Page: func() templ.Component {
-			return templates.BaseLayout(fm.Title, ..., src.ProjectPage(p.HTML))
-		}}
+	var tiles []templ.Component
+	children := map[string]ssg.Node{}
+
+	// Slugs, not a map range: map order would reshuffle the index every build.
+	for _, slug := range content.Slugs(pages) {
+		fm, _ := content.Decode[FrontMatter](pages[slug])
+		body := pages[slug].HTML
+
+		children[slug] = ssg.Node{
+			Title: fm.Title,
+			Page: func(c ssg.Ctx) templ.Component {
+				return src.ProjectPage(c.Title, c.Path, c.Prefix, body)
+			},
+		}
+		tiles = append(tiles, src.ProjectTile(fm.Title, fm.Description, slug))
 	}
-	return out
+
+	return ssg.Node{
+		Title:    "Projects",
+		Page:     func(c ssg.Ctx) templ.Component { return src.Project(c.Title, c.Path, c.Prefix, tiles) },
+		Children: children,
+	}
 }
 ```
 
-`LoadDir` is non-recursive and reads `*.md` only, keyed by filename without the
-extension. Markdown renders through goldmark with raw HTML passed through, so a
-page can drop into hand-written markup where markdown isn't enough.
+Use it as `"projects": projects("content/projects")`.
 
-## i18n
+---
 
-`BuildLocales` mounts each locale's subtree under `Children[Code]`, replacing a
-hand-written `build_<lang>` function per language. `Locale.Prefix` is not read by
-`BuildLocales` — it is there so a project can keep a locale's code, URL prefix
-and tree in one literal and thread the prefix into its own layouts.
+## i18n — locales are derived, not rewritten
+
+A locale's subtree is generated **from the base tree**. You do not write it out
+again. Every page in the base tree is mirrored under the locale's directory
+with `Ctx.Prefix` and `Ctx.Locale` set; you list only what actually differs.
+
+```go
+root = ssg.BuildLocales(root, []ssg.Locale{{
+	Code:   "de",
+	Prefix: "/de", // defaults to "/" + Code
+	Override: map[string]ssg.Node{
+		"":         {Title: "Meine Seite", Page: ssg.Templ(src_de.HomePage)},
+		"projects": projects("content/i18n-de/projects"),
+	},
+}})
+```
+
+Everything not named in `Override` — `about`, `goals`, `links`, and any
+generated children — appears under `/de/` on its own, rendered by the same
+components with `prefix = "/de"`.
+
+| | |
+| --- | --- |
+| `Code` | language code and mount directory (`de` → `/de/...`) |
+| `Prefix` | URL prefix passed to pages; defaults to `"/" + Code` |
+| `Override` | nodes that differ, keyed by path relative to the locale root (`""` is its home page) |
+
+Two rules worth knowing:
+
+- **Assets are not inherited.** `CopyFrom` and `CompileFrom` are dropped from
+  derived subtrees, because stylesheets and scripts are shared across languages
+  and served from the site root. Without this you'd get `build/de/style/`.
+- **An override replaces its node wholesale**, not field by field. Overriding
+  the locale root (`""`) is the exception: it keeps the inherited children
+  unless the replacement brings its own.
+
+---
 
 ## Scripts
 
-`CompileFrom` runs `ssg.CompileScripts`, which compiles a scripts directory:
+`CompileFrom` runs `ssg.CompileScripts(srcDir, outDir)`:
 
 - a top-level `.go` file carrying `//go:build js && wasm` → `<name>.wasm`
 - a subdirectory containing at least one such file → `<dirname>.wasm`
@@ -124,10 +258,12 @@ beside it.
 The build constraint is required: without one, `go build ./...` at the project
 root would also try to compile the script for the host platform.
 
+---
+
 ## Non-goals
 
-No config file format, no reflection magic, no enforced project structure beyond
-the `Node` tree. Directory names, file layout and template structure stay
+No config file format, no reflection magic, no enforced project structure
+beyond the `Node` tree. Directory names, file layout and template structure stay
 entirely up to the consuming project.
 
 ## License
