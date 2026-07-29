@@ -1,4 +1,4 @@
-module github.com/LukasDerBaum42/gossg
+module github.com/LukasDerBaum42/astwerk
 
 go 1.25.0
 

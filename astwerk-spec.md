@@ -1,4 +1,4 @@
-# gossg — Spec Sheet
+# astwerk — Spec Sheet
 
 **License: MIT.** Applies to the whole project, including `starter/` —
 templates are meant to be copied and edited freely with no attribution
@@ -19,14 +19,14 @@ plain Go — never a wall it can't get past.
 ## 1. Module layout
 
 ```
-gossg/
+astwerk/
   ssg/          // core: tree walker, Node, Build()
   content/      // markdown + front matter parsing
   wasmwrap/     // syscall/js ergonomics wrapper
   starter/      // copyable starter .templ files (not imported, copied)
 ```
 
-Consumers `go get github.com/LukasDerBaum42/gossg` and import `ssg`, `content`,
+Consumers `go get github.com/LukasDerBaum42/astwerk` and import `ssg`, `content`,
 and optionally `wasmwrap`. `starter/` is not a package to import — it's
 boilerplate a new project copies in and edits, same spirit as `create-react-app`
 but without hiding what the copied files do.

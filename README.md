@@ -1,4 +1,4 @@
-# gossg
+# astwerk
 
 A minimal, no-magic static site generator library for Go + [templ](https://templ.guide).
 No Node.js, no JS build tooling; optional client-side scripting via Go→WASM.
@@ -8,7 +8,7 @@ something the tree can't express, it falls back to plain Go — never a wall it
 can't get past.
 
 ```
-go get github.com/LukasDerBaum42/gossg
+go get github.com/LukasDerBaum42/astwerk
 ```
 
 ## Status
