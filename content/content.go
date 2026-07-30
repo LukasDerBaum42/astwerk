@@ -7,6 +7,7 @@ package content
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -77,6 +78,10 @@ func Parse(src string) (Page, error) { return defaultLoader.Parse(src) }
 // them keyed by file name without the extension — the page's slug.
 func LoadDir(dir string) (map[string]Page, error) { return defaultLoader.LoadDir(dir) }
 
+// LoadTree reads every *.md file under dir recursively, keyed by its path
+// relative to dir without the extension: "2024/hello-world".
+func LoadTree(dir string) (map[string]Page, error) { return defaultLoader.LoadTree(dir) }
+
 // Load reads one markdown file, splits its front matter and converts the body.
 func (l *Loader) Load(path string) (Page, error) {
 	b, err := os.ReadFile(path)
@@ -131,7 +136,68 @@ func (l *Loader) LoadDir(dir string) (map[string]Page, error) {
 	return pages, nil
 }
 
-// Slugs returns the keys of a [LoadDir] result in sorted order.
+// LoadTree reads every *.md file under dir recursively, keyed by its path
+// relative to dir without the extension: a file at dir/2024/hello-world.md gets
+// the key "2024/hello-world".
+//
+// Keys are slash-separated on every platform, so they drop straight into an
+// ssg.Node tree — a key with slashes in it nests. Nothing is special-cased:
+// dir/blog/index.md is the key "blog/index" like any other file.
+func (l *Loader) LoadTree(dir string) (map[string]Page, error) {
+	pages := make(map[string]Page)
+
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		p, err := l.Load(path)
+		if err != nil {
+			return err
+		}
+		pages[strings.TrimSuffix(filepath.ToSlash(rel), ".md")] = p
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pages, nil
+}
+
+// Chunk splits items into groups of at most size, in order, for paginating a
+// collection across /blog/, /blog/page/2/ and so on. A size of zero or less
+// returns one group holding everything.
+//
+// This is deliberately just the arithmetic. Turning the groups into pages is
+// three lines in a Generate func, and they differ per site — where page one
+// lives, what the pager looks like, whether the URL says "page" at all — so
+// there is nothing repeated left to abstract:
+//
+//	for i, group := range content.Chunk(posts, 10) {
+//		if i == 0 {
+//			continue // page one is the collection index itself
+//		}
+//		out["page/"+strconv.Itoa(i+1)] = ssg.Node{Page: index(group)}
+//	}
+func Chunk[T any](items []T, size int) [][]T {
+	if len(items) == 0 {
+		return nil
+	}
+	if size < 1 {
+		return [][]T{items}
+	}
+
+	out := make([][]T, 0, (len(items)+size-1)/size)
+	for start := 0; start < len(items); start += size {
+		out = append(out, items[start:min(start+size, len(items))])
+	}
+	return out
+}
+
+// Slugs returns the keys of a [LoadDir] or [LoadTree] result in sorted order.
 //
 // Ranging over the map directly gives a different order on every build, which
 // shuffles any index page built from it; range over Slugs instead.

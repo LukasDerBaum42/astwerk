@@ -6,10 +6,10 @@ import (
 	"syscall/js"
 	"testing"
 
-	"github.com/LukasDerBaum42/astwerk/internal/jsdom"
+	"github.com/LukasDerBaum42/astwerk/jsdom"
 )
 
-// node has no DOM, so these tests run against internal/jsdom — a stub that
+// node has no DOM, so these tests run against jsdom — a stub that
 // records what the wrapper does to it. That is exactly what is worth testing
 // here: whether each Go method reaches for the right JS property and passes the
 // right arguments. A real browser's DOM behaviour is not ours to verify.

@@ -95,6 +95,61 @@ func TestCompileScriptsReportsCompilerOutput(t *testing.T) {
 	}
 }
 
+// Compilation is fanned out across goroutines, so which failure surfaces must
+// still be decided by directory order, not by which process finished first.
+func TestCompileScriptsReportsTheSameErrorFirst(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir)
+	src := filepath.Join(dir, "scripts")
+	for _, name := range []string{"a", "b", "c"} {
+		writeFile(t, filepath.Join(src, name+".go"),
+			"//go:build js && wasm\n\npackage main\n\nfunc main() { broken "+name+" }\n")
+	}
+
+	for i := range 5 {
+		err := CompileScripts(src, filepath.Join(t.TempDir(), "out"))
+		if err == nil {
+			t.Fatalf("run %d: expected a build error", i)
+		}
+		if !strings.Contains(err.Error(), "a.go") {
+			t.Fatalf("run %d: error names the wrong file first: %v", i, err)
+		}
+	}
+}
+
+func TestScriptJobsClassifiesEntries(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "scripts")
+
+	writeFile(t, filepath.Join(src, "nav.go"), "//go:build js && wasm\n\npackage main\n")
+	writeFile(t, filepath.Join(src, "helper.go"), "package scripts\n")
+	writeFile(t, filepath.Join(src, "legacy.ts"), "export {};\n")
+	writeFile(t, filepath.Join(src, "game", "main.go"), "//go:build js && wasm\n\npackage main\n")
+	writeFile(t, filepath.Join(src, "shared", "util.go"), "package shared\n")
+	writeFile(t, filepath.Join(src, "notes.md"), "not a script")
+
+	jobs, ts, err := scriptJobs(src, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []wasmJob{
+		{filepath.Join(src, "game"), filepath.Join("out", "game.wasm")},
+		{filepath.Join(src, "nav.go"), filepath.Join("out", "nav.wasm")},
+	}
+	if len(jobs) != len(want) {
+		t.Fatalf("jobs = %v, want %v", jobs, want)
+	}
+	for i := range want {
+		if jobs[i] != want[i] {
+			t.Errorf("jobs[%d] = %v, want %v", i, jobs[i], want[i])
+		}
+	}
+	if len(ts) != 1 || ts[0] != filepath.Join(src, "legacy.ts") {
+		t.Errorf("ts files = %v, want just legacy.ts", ts)
+	}
+}
+
 // TestCompileScriptsBuildsWasm shells out to the real toolchain, so it is
 // skipped under -short.
 func TestCompileScriptsBuildsWasm(t *testing.T) {

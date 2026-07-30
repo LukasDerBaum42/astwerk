@@ -15,24 +15,29 @@ go get github.com/LukasDerBaum42/astwerk
 [Examples](https://lukasderbaum42.github.io/astwerk/examples/) ·
 [API reference](https://pkg.go.dev/github.com/LukasDerBaum42/astwerk)
 
-The documentation site is built with astwerk, from [`site/`](site) in this repo.
+The documentation site is itself built with astwerk — source at
+[astwerk-website](https://github.com/LukasDerBaum42/astwerk-website), in its own
+repository so its dependencies stay out of this module.
 
 ## Status
 
-All of §2–§7 is implemented.
+All of §2–§7 is implemented, plus §11.1–§11.3 of the follow-up list.
 
 ```
-ssg/       Node, Build, BuildLocales, CompileScripts
-content/   Load, LoadDir, Decode, Slugs
-wasmwrap/  DOM, style, events, timers, fetch, canvas   (js/wasm only)
-reactive/  signals, bindings, keyed lists, router, resources, templ interop
-starter/   13 copyable .templ files — see starter/README.md
-site/      this project's docs site, a nested module (dogfooding + CI check)
+ssg/        Node, Build, BuildLocales, CompileScripts
+content/    Load, LoadDir, LoadTree, Decode, Slugs, Chunk
+devserver/  watch, rebuild, live reload
+wasmwrap/   DOM, style, events, timers, fetch, canvas   (js/wasm only)
+reactive/   signals, bindings, keyed lists, router, resources, templ interop
+jsdom/      fake DOM for testing bindings without a browser  (js/wasm only)
+starter/    13 copyable .templ files — see starter/README.md
 ```
 
 `astwerk-spec.md` is the original design sheet. Sections 2, 4, 6a and 9 describe
 API that has since changed — the README, the docs site and the source are
-current; the spec is a historical record.
+current; the spec is a historical record. §11 and §12 are the forward-looking
+half: §11.4 (client-side runtime size) and §12 (`astwerk/x`, compiled reactive
+markup) are not started.
 
 ---
 
@@ -167,13 +172,24 @@ Page: func(c ssg.Ctx) templ.Component {
 
 ```go
 ssg.BuildOptions{
-	OutDir: "build", // default
-	Dev:    false,   // mirrors the usual --dev flag
+	OutDir:       "build", // default
+	Dev:          false,   // mirrors the usual --dev flag
+	BaseURL:      "",      // "/astwerk" when served from a subdirectory
+	RelativeURLs: false,   // emit URLs relative to each page
+	Parallel:     false,   // render sibling nodes concurrently
 }
 ```
 
 `Dev` skips the full clean of `OutDir` and overwrites files in place, so a
 running dev server keeps its inodes and open file handles.
+
+`Parallel` fans sibling nodes out across goroutines, bounded by `GOMAXPROCS`.
+Output and error reporting are identical either way — errors are collected by
+index and returned in sorted order — so the only thing that changes is wall
+time. It's opt-in because it runs your `Page`, `Files` and `Generate` functions
+concurrently: rendering templ components is safe, a `Generate` closure appending
+to a captured slice is not. `CompileScripts` is always parallel; each `.wasm` is
+built by its own `go build` process, so there's nothing of yours to race.
 
 ---
 
@@ -187,9 +203,11 @@ type Page struct {
 
 func Load(path string) (Page, error)
 func Parse(src string) (Page, error)
-func LoadDir(dir string) (map[string]Page, error) // non-recursive, *.md, keyed by slug
-func Slugs(pages map[string]Page) []string        // sorted keys
-func Decode[T any](p Page) (T, error)             // front matter into your struct
+func LoadDir(dir string) (map[string]Page, error)  // non-recursive, *.md, keyed by slug
+func LoadTree(dir string) (map[string]Page, error) // recursive, keyed by "2024/hello"
+func Slugs(pages map[string]Page) []string         // sorted keys
+func Decode[T any](p Page) (T, error)              // front matter into your struct
+func Chunk[T any](items []T, size int) [][]T       // for paging a long collection
 ```
 
 Front matter stays a generic map so each project decodes it into whatever
@@ -238,6 +256,12 @@ func projects(dir string) ssg.Node {
 
 Use it as `"projects": projects("content/projects")`.
 
+`LoadTree` is the recursive variant, keyed by path relative to `dir`:
+`content/blog/2024/hello.md` becomes `2024/hello`. `Node.Children` keys may
+contain slashes, so those keys nest on their own. `Chunk` splits a slice into
+groups of at most `size` for a paginated index — the arithmetic only, since
+turning groups into nodes is three lines and every site wants them differently.
+
 ---
 
 ## i18n — locales are derived, not rewritten
@@ -250,31 +274,40 @@ with `Ctx.Prefix` and `Ctx.Locale` set; you list only what actually differs.
 root = ssg.BuildLocales(root, []ssg.Locale{{
 	Code:   "de",
 	Prefix: "/de", // defaults to "/" + Code
-	Override: map[string]ssg.Node{
-		"":         {Title: "Meine Seite", Page: ssg.Templ(src_de.HomePage)},
-		"projects": projects("content/i18n-de/projects"),
+	Override: map[string]func(ssg.Node) ssg.Node{
+		"": func(n ssg.Node) ssg.Node {
+			n.Title, n.Page = "Meine Seite", ssg.Templ(src_de.HomePage)
+			return n
+		},
+		"about": func(n ssg.Node) ssg.Node {
+			n.Title = "Über mich" // Page and Children survive untouched
+			return n
+		},
 	},
 }})
 ```
 
-Everything not named in `Override` — `about`, `goals`, `links`, and any
-generated children — appears under `/de/` on its own, rendered by the same
-components with `prefix = "/de"`.
+Everything not named in `Override` — `goals`, `links`, and any generated
+children — appears under `/de/` on its own, rendered by the same components with
+`prefix = "/de"`.
 
 | | |
 | --- | --- |
 | `Code` | language code and mount directory (`de` → `/de/...`) |
 | `Prefix` | URL prefix passed to pages; defaults to `"/" + Code` |
-| `Override` | nodes that differ, keyed by path relative to the locale root (`""` is its home page) |
+| `Override` | patches for the nodes that differ, keyed by path relative to the locale root (`""` is its home page) |
 
 Two rules worth knowing:
 
 - **Assets are not inherited.** `CopyFrom` and `CompileFrom` are dropped from
   derived subtrees, because stylesheets and scripts are shared across languages
-  and served from the site root. Without this you'd get `build/de/style/`.
-- **An override replaces its node wholesale**, not field by field. Overriding
-  the locale root (`""`) is the exception: it keeps the inherited children
-  unless the replacement brings its own.
+  and served from the site root. Without this you'd get `build/de/style/`. A
+  locale that genuinely needs its own asset sets the field back in an override.
+- **An override is a function over the node, not a replacement for it.** It
+  receives the node `BuildLocales` would otherwise have derived, so changing one
+  field is one line and nothing you don't touch is lost. A key with no
+  counterpart in the base tree gets the zero `Node`, which is how a page that
+  exists in only one language gets written.
 
 ---
 
@@ -351,6 +384,44 @@ root would also try to compile the script for the host platform.
 
 ---
 
+## `devserver` — watch, rebuild, reload
+
+The loop you leave running while you work. Only `Build` is required:
+
+```go
+devserver.Run(context.Background(), devserver.Config{
+	Build: func() error {
+		return ssg.Build(tree(), ssg.BuildOptions{Dev: true})
+	},
+})
+```
+
+```
+2026/07/30 21:19:52 serving build/ on http://127.0.0.1:8080
+2026/07/30 21:20:24 changed: content/docs/getting-started.md, rebuilding
+2026/07/30 21:20:27 rebuilt in 3.009s, reloading
+```
+
+It serves the build directory the way a static host will — a directory means its
+`index.html`, a missing path gets your own `404.html` with a 404 status — and
+injects a live-reload script into every HTML response on the way out, so nothing
+is written into the build output. A failed build doesn't stop the server: the
+error is logged and shown in the browser as an overlay, and the next successful
+build clears it.
+
+`Build` is called again on every change, so read your content *inside* it. Pass
+`Dev: true`, so a rebuild overwrites in place instead of removing the directory
+out from under a browser mid-request.
+
+The watcher polls file size and modification time (300ms by default, configurable
+via `Interval`) rather than using OS file events. That keeps the dependency list
+at templ, goldmark and toml — which is the whole pitch — and costs a sub-second
+delay before a rebuild starts. `devserver` imports nothing from `ssg`: you hand
+it a `func() error`, so a build that does more than call `ssg.Build` gets the
+same loop with no extra plumbing.
+
+---
+
 ## `reactive` — interactive UI
 
 Opt-in, on top of `wasmwrap`. Fine-grained rather than virtual-DOM: a binding
@@ -417,6 +488,33 @@ reactive.BindTempl(preview, func() templ.Component {
 	return views.Markdown(source.Get())
 })
 ```
+
+### Testing bindings without a browser
+
+`jsdom` is a small fake DOM — the one astwerk's own tests run against, exported
+so yours can too:
+
+```go
+//go:build js && wasm
+
+func init() { jsdom.Install() }
+
+func TestCounter(t *testing.T) {
+	jsdom.Reset()
+	root := wasmwrap.Wrap(jsdom.NewElement("div"))
+	// mount your bindings into root, then assert against it
+}
+```
+
+```sh
+export PATH="$PATH:$(go env GOROOT)/lib/wasm"
+GOOS=js GOARCH=wasm go test ./...
+```
+
+It's not a browser and won't become one — layout, the CSS cascade, focus and
+paint are out of scope, and selectors are limited to `#id`, `.class`, `[attr]`
+and a bare tag name. It answers "did my Go code reach for the right property
+with the right arguments", which is what a binding test is actually asking.
 
 ## `starter/`
 

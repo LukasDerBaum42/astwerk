@@ -446,6 +446,9 @@ the orchestration in `main.go` / `build_projects.go` / `builders.go`.
 - No enforced project structure beyond the `Node` tree itself — directory
   names, file layout, and template structure remain entirely up to the
   consuming project.
+- No asset fingerprinting, cache headers, or deploy pipeline. `Build` stops at
+  `OutDir`; what serves it and how long it caches is a hosting decision, not
+  the walker's.
 
 ---
 
@@ -463,3 +466,378 @@ the orchestration in `main.go` / `build_projects.go` / `builders.go`.
    across at least one migration.
 7. `wasmwrap/reactive` (§6a) — optional, only if/when a project needs
    interactive widgets beyond what plain `wasmwrap` calls handle cleanly.
+
+---
+
+## 11. Future directions (post-implementation)
+
+§1–§10 describe the original design; the module has since been built and its
+API has moved on in places (see the README for what's current — `Node.Files`,
+`Ctx`, `Locale.Override` rather than `Tree`, `reactive` as a full package
+rather than the §6a sketch). This section is the next layer: gaps found by
+actually using the library, filtered against the same design law as
+everything above — an addition earns its place only if it removes real
+repetition, not if it just adds a knob.
+
+**Status.** §11.1 and §11.2 are built, as are three of §11.3's items —
+recursive content loading with a pagination helper, the exported DOM test
+harness, and parallel builds. What each shipped as is recorded inline below.
+Still open: the remaining §11.3 items, §11.4 (measure first), and §12.
+
+### 11.1 Locale overrides should patch a field, not replace a node — **built**
+
+The current `Locale.Override map[string]Node` (`ssg/locale.go`) replaces the
+whole node at that path. That was a deliberate call at the time — the
+alternative on the table was a reflection-based field merge, which is exactly
+the kind of magic §9 rules out. But it has a real cost in practice: changing
+just a `Title` for one locale means re-specifying `Page` (and `Children`, if
+any) alongside it, or the override silently drops them. Nothing about that is
+wrong, but it's boilerplate the override map exists specifically to avoid, and
+it will make Override a recurring papercut every time a locale needs one
+different string.
+
+The fix that doesn't reintroduce reflection: make `Override`'s value a
+function over the base node instead of the node itself, so the override sees
+what it would otherwise have to restate and only changes what it means to
+change.
+
+```go
+type Locale struct {
+    Code     string
+    Prefix   string
+    Override map[string]func(base Node) Node
+}
+```
+
+```go
+root = ssg.BuildLocales(root, []ssg.Locale{{
+    Code: "de",
+    Override: map[string]func(ssg.Node) ssg.Node{
+        "about": func(n ssg.Node) ssg.Node {
+            n.Title = "Über mich"
+            return n
+        },
+    },
+}})
+```
+
+`base` is the node `BuildLocales` would otherwise have derived at that path —
+same `Page`, `Children` and `Generate` it has today. Changing one field is one
+line; replacing the page function or dropping children wholesale is still
+possible (assign over the field), it's just no longer the *only* option. No
+reflection, no field-name matching, no merge semantics to document — it's a
+plain Go function doing exactly what it says. The locale root's current
+special case (`""` keeps inherited children unless the replacement brings its
+own) becomes the ordinary case instead of an exception, since `base` already
+carries those children into every override.
+
+This is the one item in this section worth treating as a real target rather
+than a maybe — it's a small, mechanical change to `ssg/locale.go` and the call
+sites in the docs site's locale usage (currently none, but the docs and
+README examples need updating alongside it). The docs site has since moved to
+its own repository, `astwerk-website`.
+
+**Shipped as written.** `Override` is now `map[string]func(base Node) Node`, a
+clean break with no compatibility field. The locale-root special case is gone
+as predicted — `base` carries the inherited children into every override, so
+there was nothing left for the exception to do. One unplanned bonus: because an
+override can now set `CopyFrom`/`CompileFrom` back onto a derived node, the
+"locale asset overrides are all-or-nothing" gap in §11.3 has an answer without
+any code of its own.
+
+### 11.2 A dev server, generalized from working prior art — **built**
+
+`BuildOptions.Dev` only skips the destructive clean; there's still no
+watch-rebuild-reload loop, so every other change is a manual `go run .` plus a
+manual browser refresh. This doesn't need inventing from scratch —
+`lukasderbaum42.github.io/devserver.py` already does it (hash-based file
+watching over a configurable extension set, a rebuild via shell command, and
+live reload over SSE with a script injected before `</body>`) and has been
+running against a real astwerk-shaped site. The work here is porting that
+approach into Go — so a consumer doesn't need Python on the machine, matching
+the "one toolchain" pitch the rest of the library makes — not redesigning the
+mechanism. `fsnotify` for the watch side, an `http.Server` for the rest;
+`ssg.Build` with `Dev: true` is already the right build call to run on each
+change.
+
+**Shipped as `devserver/`, with one deviation: no `fsnotify`.** Polling size
+and mtime keeps `go.mod` at its three dependencies, which is the same argument
+this section makes for porting the thing into Go at all — and `fsnotify` would
+have needed a debounce and a polling fallback regardless, since editors that
+save by rename don't emit the event you'd want. The cost is a sub-second delay,
+tunable via `Config.Interval`.
+
+Two things the Python original didn't have, both earned by using it:
+serving `404.html` for a miss with a 404 status, so the page a visitor really
+gets is the page you develop against; and a `builderror` SSE event rendered as
+an overlay, because a failed build otherwise leaves stale HTML on screen with
+no signal at all.
+
+The package deliberately imports nothing from `ssg` — `Config.Build` is a
+`func() error`. That keeps it a general watch-rebuild-reload loop rather than a
+second entry point into the walker, and a build that also generates CSS or runs
+`templ generate` gets the same loop for free.
+
+### 11.3 Smaller, more speculative gaps
+
+Lower priority than the two above, and each needs a concrete use case before
+it's worth building rather than just naming. Three have since been built; the
+rest still want a use case first.
+
+- **`reactive.Router` has no query-string or hash access.** `Params` only
+  captures path segments; reading `?page=2` today means parsing
+  `location.search` by hand against raw `syscall/js`.
+- **`wasmwrap.Fetch`/`FetchJSON` are GET-only.** No method, headers, or body —
+  a form that submits data has nowhere to go but raw `syscall/js`.
+- **`content.LoadDir` is non-recursive with no pagination helper.** — **built.**
+  `LoadTree` walks recursively, keyed by slash-separated relative path
+  (`2024/hello`), which drops straight into a `Node` tree because `Children`
+  keys already nest on slashes. Pagination shipped as `Chunk[T]` and nothing
+  more: turning groups into nodes is three lines that differ per site — where
+  page one lives, what the pager looks like — so there was no repetition left
+  to abstract past the arithmetic. A pagination *type* would also have had to
+  import `ssg`, which `content` must not do.
+- **No draft/publish convention.** Every project re-derives
+  `if fm.Draft && !dev { continue }` by hand. This may not clear the bar for
+  an actual API — it's one line already — but it keeps coming up, which is
+  worth a documented pattern even if it never becomes a function.
+- **`Signal[T]` has no opt-in custom equality.** `Set` compares via
+  `any(a) == any(b)`, recovering to "not equal" for slices/maps/funcs — so a
+  signal holding a slice re-runs every subscriber on every `Set`, even when the
+  new slice is content-identical. A `NewSignalFunc(initial T, equal func(a, b
+  T) bool)` would let a caller opt into cheaper comparisons where it matters.
+- **No public DOM test harness for `reactive`.** — **built.** `internal/jsdom`
+  moved to a top-level `jsdom` package unchanged, and gained tests of its own
+  now that it's API rather than a helper. Its package doc now states the
+  compatibility promise explicitly — which selectors it supports, and that
+  layout, cascade, focus and paint are permanently out of scope — because the
+  risk in exporting a stub is people expecting it to grow into a browser.
+- **Builds are single-threaded, with no parallelism and no incremental
+  cache.** — **built, in the half that was safe to build.** `CompileScripts`
+  is now unconditionally parallel: each `.wasm` is a separate `go build`
+  process writing its own file, so no consumer code races. `Build` got
+  `BuildOptions.Parallel` as an opt-in instead, because the analysis above is
+  right about the walker's own state and silent about the user's: a `Generate`
+  closure appending to a captured slice is not safe to move onto another
+  goroutine, and turning that into a data race on a routine `go get` would be
+  the wrong default. Both collect errors by index and return the lowest one, so
+  a parallel failure names the same node a sequential one would. Incremental
+  caching remains unbuilt and unwanted.
+- **Locale asset overrides are all-or-nothing.** — **resolved by §11.1**, with
+  no code of its own: an override function can set `CopyFrom`/`CompileFrom`
+  back onto the node it receives, so a locale that needs one localized asset
+  says so in one line. The default is still "assets are not inherited".
+- **No scaffolding command.** `starter/` (§7) requires a manual
+  `grep -rl example.com/yoursite | xargs sed -i` to land in a new project. A
+  small `astwerk-new` that copies `starter/` and rewrites the module path in
+  one step would remove the one place a new project still needs a shell
+  one-liner instead of `go run`.
+
+### 11.4 Client-side runtime size
+
+The complaint that actually matters here isn't a byte count in isolation —
+it's that astwerk's whole pitch is a framework *without* the bloat and
+abstraction Node-based frameworks carry. The bar is comparative: whatever a
+page costs to become interactive should not exceed what an equivalent React,
+Vue, Svelte or Astro-island component would cost for the same job. A ~2 MB
+floor per script (closer to 5 MB with `reactive`) is suspicious next to that
+bar and hasn't been measured against it yet.
+
+**Measure before building anything below.** None of the ideas in this section
+have been tried. Before picking one: build a size harness that reports (a) the
+compiled size of a bare `wasmwrap` script, (b) the same script pulling in
+`reactive`, and (c) each of those again once a candidate fix is applied —
+compared side by side with a comparably-featured Svelte/Astro-island bundle
+doing the same counter-and-list job. `go tool nm -size` (or an equivalent
+weight-by-package pass) on the current binaries would also settle whether the
+2→5 MB jump when adding `reactive` is runtime/GC/scheduler cost inherent to
+Go, or something surprising getting pulled in through one call site — that
+answer changes which fix below is worth pursuing at all.
+
+**TinyGo, gated behind an explicit opt-in.** The most promising lever for the
+existing `wasmwrap`/`reactive` code as-is, since it changes the compiler, not
+the API — same `syscall/js`-based source either way. It has not been tried
+against this codebase. If it works, it needs to ship as a flag a project
+chooses (`CompileScripts` gaining a toolchain option, or an env var read at
+build time), never a silent default swap — `reactive`'s generics-heavy API and
+`Resource`'s blocking-goroutine pattern are exactly the two things TinyGo's
+narrower runtime is most likely to handle differently, and a project that
+hasn't verified its own scripts against that runtime shouldn't get it for
+free on a routine `go get` upgrade.
+
+**A build-time compile target that never ships the Go runtime at all.** This
+was the direction under consideration before WASM was picked, and it's worth
+taking seriously as a parallel track rather than the last-resort framing it
+originally got here — see §12 for the concrete plan. The one-line version:
+`reactive`'s actual surface is deliberately narrow — signals, a handful of
+`Bind*` calls, keyed-list reconciliation — and that surface already *is* what
+a compiler like Svelte's produces internally (direct, targeted DOM writes,
+no VDOM). Transpiling that surface straight to calls against a small
+hand-written JS runtime, instead of compiling it to WASM carrying the whole
+Go runtime, is a materially bigger engineering bet than TinyGo, but it's the
+only option on this list that also fixes the authoring model, not just the
+byte count.
+
+**Not pursuing right now:**
+
+- **A custom `syscall/js`-replacement ABI.** Considered and set aside —
+  it mostly duplicates what TinyGo already buys at the ABI level, costs
+  giving up `go build` as the toolchain, and isn't expected to save enough
+  on its own to justify hand-wiring every `wasmwrap` call.
+- **Brotli pre-compression.** Not urgent. Revisit once the measurement above
+  says transfer size, specifically, is the bottleneck — and confirm whatever
+  host is serving the file actually negotiates the encoding first, since a
+  pre-built `.br` sitting next to the `.wasm` does nothing if the server
+  doesn't send `Content-Encoding` for it.
+- **`wasm-opt -Oz` (Binaryen) as a build pass.** Still a plausible easy win,
+  not yet tried; `-ldflags="-s -w"` alone has already been tried against the
+  current binaries with minimal gain, which itself is a data point — the
+  weight likely isn't in debug symbols.
+
+### 11.5 Explicitly still not doing this
+
+- **Asset fingerprinting / cache-busting for `CopyFrom`/`CompileFrom`
+  output.** Raised and rejected: stable filenames across builds are the
+  current behavior on purpose. Content hashing, cache headers and CDN
+  invalidation are a deploy pipeline's job, not the walker's — astwerk stops
+  at `OutDir` and stays out of how it's served.
+
+---
+
+## 12. `astwerk/x` — compiled reactive markup (proposed)
+
+Not started. This is the plan for the "generate JS" direction named in §11.4,
+worked out in more detail because it's the one item on that list that fixes
+two separate complaints at once: the megabyte-scale WASM floor, *and* that
+`reactive`/`wasmwrap` today force interactive logic into a separate file from
+the markup it drives, matched by hand-picked `data-*` selectors that can
+silently drift out of sync (the docs site's test suite, now in the
+`astwerk-website` repository, has to pin this contract page by page precisely
+because nothing catches it at build time otherwise). The design law for this feature specifically: **simple by
+default, powerful when needed** — most of what an application actually does
+(show a value, react to a click, list some items, show a loading state)
+should read like markup with live values in it, JSX-style; WASM stays
+available, in full, for the cases that need it, but stops being the only way
+to do the common 90%.
+
+### 12.1 What it looks like
+
+Reactive bindings are ordinary-looking templ expressions, written directly
+where the value or handler belongs — not a separate function matched to the
+markup by name, comment, or signature:
+
+```templ
+templ Counter() {
+	<div>
+		@x.Text(count)
+		<button onclick={ x.On(increment) }>+</button>
+	</div>
+}
+```
+
+`count` and `increment` are ordinary Go values in scope — a `*x.Signal[string]`
+and a plain `func()` closure — declared wherever the component's other Go code
+lives (a `var`/`func` in the same `.templ` file, same as any other templ
+component's supporting code today). Nothing here is a new file, a new
+directory convention, or a selector to keep in sync by hand; the binding sits
+at the exact spot in the markup it affects, same as JSX or a Svelte template.
+
+`x.Text`, `x.On`, and the rest of the small marker set (`x.Attr`, `x.Class`,
+`x.Show`, `x.Value`/`x.Checked`/`x.Number` for two-way form fields, `x.List`
+for keyed lists) are **plain functions that also work with zero tooling**:
+`x.Text(count)` running through an ordinary `templ generate` + `go build`,
+with no astwerk transpile step at all, still renders the current value as
+static HTML — same as today's "the page reads fine with WebAssembly
+disabled" guarantee, just automatic instead of requiring a hand-written
+`<noscript>` fallback. The transpile step is additive: it turns those same
+call sites into live bindings; skipping it costs interactivity, never
+correctness.
+
+### 12.2 How a call site becomes a live binding
+
+Two passes, not one, because assigning a stable DOM anchor and finding the
+Go logic to run when it fires are different problems:
+
+1. **Anchor assignment happens at normal SSG render time**, with no new
+   parsing. `x.Text`, `x.List` and friends own the element they render (a
+   `templ.Component`, called with `@`, exactly like any other templ
+   subcomponent) and stamp it with `data-x="N"`, N from a counter scoped to
+   one page's render pass. Because a page's SSG render is a single
+   deterministic walk, the same markup always gets the same N — no manual
+   IDs, no risk of collision, and it costs nothing beyond what rendering the
+   page already does.
+2. **A build pass extracts the client logic.** After `templ generate`, a
+   new tool walks each component's generated Go (`go/ast`/`go/types`, same
+   approach as §11.4's transpiler) looking for calls into `astwerk/x` in
+   render order, and for each one, transpiles the Go expression or closure
+   passed to it — `increment`, `count`'s derivation, whatever a `Bind`-style
+   marker's argument is — into JS calling the vendored runtime (§12.4),
+   addressed to the matching `data-x="N"`. Render order from this static
+   walk has to agree with the runtime counter from pass 1 for the anchors to
+   line up; for straight-line markup (no marker inside an `if`/`for` in the
+   template) the two are trivially the same sequence. Markers used inside
+   conditional or looped markup are the open risk in this design — the
+   render-time counter and the static walk can only be kept in sync there
+   with real care, and it's the first thing worth a throwaway prototype
+   against before committing further, rather than assumed solved.
+
+### 12.3 v1 scope
+
+- **In scope:** `Signal`/`Computed`, `Text`/`Attr`/`Class`/`Show` bindings,
+  two-way form fields (`Value`/`Checked`/`Number`), event handlers (`On`),
+  keyed lists (`List`), and `Resource` (loading/error/data signals for async
+  data) — common enough on ordinary pages that leaving it WASM-only would
+  undercut the point of a lightweight default path.
+- **Out of scope for v1, WASM-only:** `Router`. History/URL integration is
+  its own can of worms independent of the transpiler question, and nothing
+  about the rest of this design depends on solving it first.
+- **Escape hatch:** an `x.Ref("name")` marker for imperative access to a
+  specific element (canvas, focus management, anything that isn't a
+  declarative binding) — a small generated typed accessor per component
+  (e.g. a `Refs` struct with a `CanvasEl` field) rather than a raw selector
+  string, so the escape hatch is still compile-time checked. This sits
+  alongside the declarative markers, not instead of them — most of an
+  application shouldn't need it.
+- **The real escape hatch is WASM, unconditionally.** Anything §12's
+  transpiled subset can't express — goroutines, `reflect`, arbitrary stdlib,
+  `Router`, raw `wasmwrap`/`syscall/js` access — is a normal `CompileFrom`
+  script exactly as it works today. `astwerk/x` is the default because most
+  interactivity is simple; nothing about adopting it locks a project out of
+  the full `reactive`/`wasmwrap` path for the one part of a page that isn't.
+
+### 12.4 The vendored runtime
+
+A small, hand-written JS file (target: low single-digit KB, not megabytes)
+implementing the same semantics as `reactive/signal.go` and `reactive/bind.go`
+— signals with dependency tracking, `Effect`, `Batch`, and DOM binding
+primitives — committed into the astwerk repo and copied into a site's output
+once, by the same `CompileFrom`-style build step, and shared by every page
+that uses `astwerk/x`. "Vendored" specifically: no npm, no `package.json`, no
+build-time dependency resolution — it's a checked-in file astwerk owns and
+ships, read and auditable in one sitting, same spirit as `wasm_exec.js` being
+copied in today rather than fetched from anywhere.
+
+### 12.5 Naming
+
+`astwerk/x` is a placeholder, not a decision — a distinct package from
+`reactive`/`wasmwrap` (confirmed: the transpiled subset of Go it accepts
+genuinely differs from what compiles under full WASM, and pretending they're
+the same API would just move the "why doesn't this compile" surprise
+somewhere less obvious). Whatever it's actually called should say "the
+default, lightweight path" next to `reactive` reading as "the complete,
+WASM-backed path" — bikeshed later.
+
+### 12.6 Suggested order of attack
+
+1. **Spike the anchor/extraction mechanism alone**, against nothing more
+   than the counter example: `x.Text`, `x.On`, straight-line markup only, no
+   conditionals. This is the one piece of the whole design that's genuinely
+   novel and unproven — everything else (the transpiled Go subset, the
+   vendored runtime's signal semantics) is a smaller, more mechanical version
+   of work already done for §11.4 and `reactive` respectively.
+2. Once anchors work, build out the v1 transpiled subset (§12.3) against the
+   existing Examples page demos as the test corpus — they're already written
+   against `reactive`'s API, so porting them to `astwerk/x` is a natural
+   acceptance test.
+3. Only then decide whether conditional/looped marker placement is worth
+   solving, based on how much v1 actually needed it in practice.

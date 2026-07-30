@@ -6,8 +6,10 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/a-h/templ"
 )
@@ -29,7 +31,8 @@ const DefaultOutDir = "build"
 //  5. Children are walked, appending each key to p.
 //
 // Children are visited in sorted key order, so a build is reproducible and a
-// failure always reports the same node first.
+// failure always reports the same node first. [BuildOptions.Parallel] gives up
+// the visit order but keeps both guarantees.
 func Build(root Node, opts BuildOptions) error {
 	if opts.OutDir == "" {
 		opts.OutDir = DefaultOutDir
@@ -112,16 +115,56 @@ func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions) 
 		children = merged
 	}
 
-	for _, key := range slices.Sorted(maps.Keys(children)) {
+	keys := slices.Sorted(maps.Keys(children))
+	build := func(i int) error {
+		key := keys[i]
 		sub, err := resolve(dir, key)
 		if err != nil {
 			return fmt.Errorf("ssg: child %q of %s: %w", key, dir, err)
 		}
-		if err := buildNode(children[key], sub, joinPath(sitePath, key), loc, opts); err != nil {
+		return buildNode(children[key], sub, joinPath(sitePath, key), loc, opts)
+	}
+
+	if !opts.Parallel {
+		for i := range keys {
+			if err := build(i); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return inParallel(len(keys), build)
+}
+
+// inParallel runs fn for every index at once, bounded by GOMAXPROCS, and
+// returns the lowest-indexed error.
+//
+// Collecting errors by index rather than racing them into a channel is what
+// keeps a parallel build's failure reporting identical to a sequential one's:
+// two broken pages always name the same one first.
+func inParallel(n int, fn func(int) error) error {
+	if n == 0 {
+		return nil
+	}
+
+	errs := make([]error, n)
+	sem := make(chan struct{}, min(n, runtime.GOMAXPROCS(0)))
+
+	var wg sync.WaitGroup
+	for i := range n {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			errs[i] = fn(i)
+		})
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 

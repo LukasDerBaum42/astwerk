@@ -150,10 +150,20 @@ func TestLocaleOverride(t *testing.T) {
 
 	root := BuildLocales(base, []Locale{{
 		Code: "de",
-		Override: map[string]Node{
-			"":      {Title: "Meine Seite", Page: text("german home")},
-			"about": {Title: "Über mich", Page: text("german about")},
-			"neu":   {Title: "Neu", Page: text("german only")}, // no base counterpart
+		Override: map[string]func(Node) Node{
+			"": func(n Node) Node {
+				n.Title, n.Page = "Meine Seite", text("german home")
+				return n
+			},
+			"about": func(n Node) Node {
+				n.Title, n.Page = "Über mich", text("german about")
+				return n
+			},
+			// No base counterpart: n is the zero Node.
+			"neu": func(n Node) Node {
+				n.Title, n.Page = "Neu", text("german only")
+				return n
+			},
 		},
 	}})
 
@@ -187,8 +197,10 @@ func TestLocaleRootOverrideKeepsChildren(t *testing.T) {
 		Children: map[string]Node{"about": {Page: text("english about")}},
 	}
 	root := BuildLocales(base, []Locale{{
-		Code:     "de",
-		Override: map[string]Node{"": {Page: text("german home")}},
+		Code: "de",
+		Override: map[string]func(Node) Node{
+			"": func(n Node) Node { n.Page = text("german home"); return n },
+		},
 	}})
 
 	out := filepath.Join(dir, "build")
@@ -200,6 +212,64 @@ func TestLocaleRootOverrideKeepsChildren(t *testing.T) {
 	}
 	if got := read(t, filepath.Join(out, "de", "about", "index.html")); got != "english about" {
 		t.Errorf("de/about/index.html = %q, want the inherited page", got)
+	}
+}
+
+// The point of the func form: touching one field leaves everything else — the
+// page, the generated children — exactly as derived.
+func TestLocaleOverridePatchesOneField(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	base := Node{
+		Page: text("home"),
+		Children: map[string]Node{
+			"projects": {
+				Title: "Projects",
+				Page:  ctxText(),
+				Generate: func() map[string]Node {
+					return map[string]Node{"alpha": {Page: text("alpha")}}
+				},
+			},
+		},
+	}
+	root := BuildLocales(base, []Locale{{
+		Code: "de",
+		Override: map[string]func(Node) Node{
+			"projects": func(n Node) Node { n.Title = "Projekte"; return n },
+		},
+	}})
+
+	out := filepath.Join(dir, "build")
+	if err := Build(root, BuildOptions{OutDir: out}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := `title="Projekte" path="de/projects/" prefix="/de" locale="de" url="/de/projects/"`
+	if got := read(t, filepath.Join(out, "de", "projects", "index.html")); got != want {
+		t.Errorf("de/projects/index.html =\n  %s\nwant\n  %s", got, want)
+	}
+	if got := read(t, filepath.Join(out, "de", "projects", "alpha", "index.html")); got != "alpha" {
+		t.Errorf("de/projects/alpha/index.html = %q, want the generated child kept", got)
+	}
+}
+
+// A nil override function is skipped rather than blanking the node.
+func TestLocaleOverrideIgnoresNilFunc(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	root := BuildLocales(Node{Page: text("home")}, []Locale{{
+		Code:     "de",
+		Override: map[string]func(Node) Node{"": nil},
+	}})
+
+	out := filepath.Join(dir, "build")
+	if err := Build(root, BuildOptions{OutDir: out}); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(out, "de", "index.html")); got != "home" {
+		t.Errorf("de/index.html = %q, want the derived page", got)
 	}
 }
 

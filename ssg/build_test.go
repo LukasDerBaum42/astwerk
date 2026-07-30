@@ -2,6 +2,7 @@ package ssg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/a-h/templ"
@@ -248,6 +250,103 @@ func TestBuildPropagatesRenderError(t *testing.T) {
 	err := Build(Node{Children: map[string]Node{"a": {Page: boom}}}, BuildOptions{OutDir: out})
 	if err == nil || !strings.Contains(err.Error(), "render") {
 		t.Fatalf("err = %v, want a render error", err)
+	}
+}
+
+// parallelSite is wide and deep enough that a race, if there is one, has room
+// to happen: sibling pages, extra files, a generated collection, and a locale
+// subtree derived from all of it.
+func parallelSite() Node {
+	base := Node{
+		Title: "Site",
+		Page:  ctxText(),
+		Files: map[string]PageFunc{"404.html": text("gone"), "feed/rss.xml": text("<rss/>")},
+		Children: map[string]Node{
+			"about": {Title: "About", Page: ctxText()},
+			"goals": {Title: "Goals", Page: ctxText()},
+			"projects": {
+				Title: "Projects",
+				Page:  ctxText(),
+				Generate: func() map[string]Node {
+					out := map[string]Node{}
+					for i := range 12 {
+						name := fmt.Sprintf("p%02d", i)
+						out[name] = Node{Title: name, Page: ctxText()}
+					}
+					return out
+				},
+			},
+		},
+	}
+	return BuildLocales(base, []Locale{{Code: "de"}, {Code: "fr"}})
+}
+
+func TestBuildParallelMatchesSequential(t *testing.T) {
+	dir := t.TempDir()
+	seq, par := filepath.Join(dir, "seq"), filepath.Join(dir, "par")
+
+	if err := Build(parallelSite(), BuildOptions{OutDir: seq}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Build(parallelSite(), BuildOptions{OutDir: par, Parallel: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	files := tree(t, seq)
+	if got := tree(t, par); !equal(got, files) {
+		t.Fatalf("parallel build wrote\n%v\nwant\n%v", got, files)
+	}
+	for _, f := range files {
+		if a, b := read(t, filepath.Join(seq, f)), read(t, filepath.Join(par, f)); a != b {
+			t.Errorf("%s differs:\n sequential %q\n parallel   %q", f, a, b)
+		}
+	}
+}
+
+// Which failure surfaces must not depend on which goroutine got there first.
+func TestBuildParallelReportsTheSameErrorFirst(t *testing.T) {
+	boom := func(msg string) PageFunc {
+		return func(Ctx) templ.Component {
+			return templ.ComponentFunc(func(context.Context, io.Writer) error {
+				return errors.New(msg)
+			})
+		}
+	}
+	root := Node{Children: map[string]Node{
+		"a": {Page: boom("first")},
+		"b": {Page: boom("second")},
+		"c": {Page: boom("third")},
+	}}
+
+	for i := range 20 {
+		out := filepath.Join(t.TempDir(), "build")
+		err := Build(root, BuildOptions{OutDir: out, Parallel: true})
+		if err == nil || !strings.Contains(err.Error(), "first") {
+			t.Fatalf("run %d: err = %v, want the error from child \"a\"", i, err)
+		}
+	}
+}
+
+func TestInParallelRunsEveryIndexOnce(t *testing.T) {
+	const n = 64
+	var mu sync.Mutex
+	seen := make([]int, n)
+
+	if err := inParallel(n, func(i int) error {
+		mu.Lock()
+		defer mu.Unlock()
+		seen[i]++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range seen {
+		if c != 1 {
+			t.Errorf("index %d ran %d times, want 1", i, c)
+		}
+	}
+	if err := inParallel(0, func(int) error { return errors.New("never") }); err != nil {
+		t.Errorf("inParallel(0) = %v, want nil", err)
 	}
 }
 

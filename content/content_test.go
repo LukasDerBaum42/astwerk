@@ -164,6 +164,78 @@ func TestLoadDir(t *testing.T) {
 	}
 }
 
+func TestLoadTree(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("hello.md", "+++\nTitle = \"Hello\"\n+++\nbody\n")
+	write("2024/first.md", "+++\nTitle = \"First\"\n+++\nbody\n")
+	write("2024/03/deep.md", "+++\nTitle = \"Deep\"\n+++\nbody\n")
+	write("2024/index.md", "+++\nTitle = \"Index\"\n+++\nbody\n")
+	write("2024/notes.txt", "ignored")
+
+	pages, err := LoadTree(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"2024/03/deep", "2024/first", "2024/index", "hello"}
+	if got := Slugs(pages); !reflect.DeepEqual(got, want) {
+		t.Fatalf("keys = %v, want %v", got, want)
+	}
+	if got := pages["2024/03/deep"].Meta["Title"]; got != "Deep" {
+		t.Errorf("nested page did not parse: Meta[Title] = %v", got)
+	}
+}
+
+func TestLoadTreeMissing(t *testing.T) {
+	if _, err := LoadTree(filepath.Join(t.TempDir(), "nope")); err == nil {
+		t.Fatal("expected an error for a missing directory")
+	}
+}
+
+func TestLoadTreeReportsAParseError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bad.md"), []byte("+++\nTitle = \n+++\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadTree(dir); err == nil {
+		t.Fatal("expected the front matter error to propagate")
+	}
+}
+
+func TestChunk(t *testing.T) {
+	cases := []struct {
+		name  string
+		items []int
+		size  int
+		want  [][]int
+	}{
+		{"even", []int{1, 2, 3, 4}, 2, [][]int{{1, 2}, {3, 4}}},
+		{"remainder", []int{1, 2, 3, 4, 5}, 2, [][]int{{1, 2}, {3, 4}, {5}}},
+		{"larger than input", []int{1, 2}, 10, [][]int{{1, 2}}},
+		{"one per page", []int{1, 2}, 1, [][]int{{1}, {2}}},
+		{"empty", nil, 3, nil},
+		{"zero size means one page", []int{1, 2}, 0, [][]int{{1, 2}}},
+		{"negative size means one page", []int{1, 2}, -4, [][]int{{1, 2}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Chunk(c.items, c.size); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("Chunk(%v, %d) = %v, want %v", c.items, c.size, got, c.want)
+			}
+		})
+	}
+}
+
 func TestLoadDirMissing(t *testing.T) {
 	if _, err := LoadDir(filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Fatal("expected an error for a missing directory")

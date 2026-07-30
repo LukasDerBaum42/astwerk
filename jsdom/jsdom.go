@@ -3,14 +3,41 @@
 // Package jsdom provides a minimal fake DOM for tests running under
 // GOOS=js GOARCH=wasm.
 //
-// node has no DOM, so wrapper tests need one to talk to. This stub is
-// deliberately small and dumb: it records what was done to it so a test can
-// assert that a Go method reached for the right JS property with the right
-// arguments. It is not an attempt to emulate a browser, and nothing here should
-// grow to cover behaviour that only a real DOM can settle.
+// node has no DOM, so a test that drives [wasmwrap] or [reactive] needs one to
+// talk to. This is the stub astwerk's own tests run against, exported so your
+// project's bindings can be unit-tested the same way — no browser, no headless
+// driver, just `GOOS=js GOARCH=wasm go test`:
 //
-// Selector support is limited to what the tests need: "#id", ".class",
-// "[attr]" and a bare tag name.
+//	func init() { jsdom.Install() }
+//
+//	func TestCounter(t *testing.T) {
+//		jsdom.Reset()
+//		root := wasmwrap.Wrap(jsdom.NewElement("div"))
+//		mountCounter(root)
+//		// assert against root
+//	}
+//
+// It is deliberately small and dumb: it records what was done to it so a test
+// can assert that a Go method reached for the right JS property with the right
+// arguments. It is not an attempt to emulate a browser, and nothing here should
+// grow to cover behaviour that only a real DOM can settle — layout, CSS
+// cascade, focus, and paint are all out of scope by design. A test that needs
+// those needs a real browser.
+//
+// What it does implement, and what a test may rely on:
+//
+//   - elements: tagName, children, appendChild, insertBefore, remove,
+//     cloneNode, textContent, innerHTML, attributes, classList, style,
+//     value/checked, getBoundingClientRect;
+//   - selectors, limited to "#id", ".class", "[attr]" and a bare tag name,
+//     for querySelector, querySelectorAll and closest;
+//   - events: addEventListener, removeEventListener and a dispatch helper;
+//   - a 2D canvas context that records its calls;
+//   - location, history and requestAnimationFrame, so the router has
+//     something to drive.
+//
+// [wasmwrap]: https://pkg.go.dev/github.com/LukasDerBaum42/astwerk/wasmwrap
+// [reactive]: https://pkg.go.dev/github.com/LukasDerBaum42/astwerk/reactive
 package jsdom
 
 import "syscall/js"

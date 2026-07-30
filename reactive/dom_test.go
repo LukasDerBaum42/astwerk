@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LukasDerBaum42/astwerk/internal/jsdom"
+	"github.com/LukasDerBaum42/astwerk/jsdom"
 	"github.com/LukasDerBaum42/astwerk/wasmwrap"
 	"github.com/a-h/templ"
 )
 
-// node has no DOM, so these tests run against internal/jsdom, the same stub the
+// node has no DOM, so these tests run against jsdom, the same stub the
 // wasmwrap tests use. Assertions check that a binding pokes the right property
 // at the right time.
 func init() { jsdom.Install() }

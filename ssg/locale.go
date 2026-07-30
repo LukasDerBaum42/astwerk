@@ -21,22 +21,39 @@ type Locale struct {
 	// Ctx.Prefix. Defaults to "/" + Code.
 	Prefix string
 
-	// Override replaces nodes in the derived subtree, keyed by path relative to
+	// Override patches nodes in the derived subtree, keyed by path relative to
 	// the locale root: "" is the locale's home page, "projects" its projects
-	// node, "a/b" a nested one. A key with no counterpart in the base tree is
-	// added. The node replaces its counterpart wholesale — it is not merged
-	// field by field.
-	Override map[string]Node
+	// node, "a/b" a nested one.
+	//
+	// Each function receives the node BuildLocales would otherwise have derived
+	// at that path — same Title, Page, Files, Generate and Children — and
+	// returns what to use instead. Changing one field is one line, and nothing
+	// you don't touch is lost:
+	//
+	//	"about": func(n ssg.Node) ssg.Node {
+	//		n.Title = "Über mich"
+	//		return n
+	//	},
+	//
+	// Replacing the page wholesale is the same shape, just assigning over more
+	// fields. A key with no counterpart in the base tree gets the zero Node, so
+	// a locale-only page is written out in full.
+	Override map[string]func(base Node) Node
 }
 
 // BuildLocales returns a copy of base with each locale mounted under
 // Children[locale.Code].
 //
-// The derived subtree carries over Page, Files, Generate and Children from the
-// base tree. It deliberately does not carry over CopyFrom or CompileFrom:
-// stylesheets, images and scripts are shared by every language and are served
-// from the site root, so copying them per locale would just duplicate the
-// output. Branches that end up with nothing to render are dropped.
+// The derived subtree carries over Title, Page, Files, Generate and Children
+// from the base tree. It deliberately does not carry over CopyFrom or
+// CompileFrom: stylesheets, images and scripts are shared by every language and
+// are served from the site root, so copying them per locale would just
+// duplicate the output. A locale that genuinely needs its own asset — a
+// localized screenshot — can set the field back in an Override. Branches that
+// end up with nothing to render are dropped.
+//
+// Overrides are applied shallowest-first, so an override of "projects" is in
+// place before one of "projects/alpha" sees its parent.
 //
 // base is not modified.
 func BuildLocales(base Node, locales []Locale) Node {
@@ -54,7 +71,11 @@ func BuildLocales(base Node, locales []Locale) Node {
 
 		sub, _ := derive(base)
 		for _, path := range sortedKeys(l.Override) {
-			sub = override(sub, splitPath(path), l.Override[path])
+			fn := l.Override[path]
+			if fn == nil {
+				continue
+			}
+			sub = override(sub, splitPath(path), fn)
 		}
 		sub.locale = &localeCtx{code: l.Code, prefix: prefix}
 
@@ -93,20 +114,16 @@ func derive(n Node) (Node, bool) {
 	return out, live
 }
 
-// override replaces the node at path within n, creating intermediate nodes as
-// needed. An empty path replaces n itself, keeping its existing children unless
-// the replacement brings its own.
-func override(n Node, path []string, repl Node) Node {
+// override applies fn to the node at path within n, creating intermediate nodes
+// as needed. An empty path patches n itself.
+func override(n Node, path []string, fn func(Node) Node) Node {
 	if len(path) == 0 {
-		if repl.Children == nil && repl.Generate == nil {
-			repl.Children = n.Children
-		}
-		return repl
+		return fn(n)
 	}
 
 	children := map[string]Node{}
 	maps.Copy(children, n.Children)
-	children[path[0]] = override(children[path[0]], path[1:], repl)
+	children[path[0]] = override(children[path[0]], path[1:], fn)
 	n.Children = children
 	return n
 }
@@ -119,7 +136,7 @@ func splitPath(p string) []string {
 	return strings.Split(p, "/")
 }
 
-func sortedKeys(m map[string]Node) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	// Shallow paths first, so "projects" is applied before "projects/foo".
 	keys := make([]string, 0, len(m))
 	for k := range m {

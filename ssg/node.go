@@ -211,6 +211,16 @@ type BuildOptions struct {
 	// "/astwerk" and "/astwerk/" all mean the same thing.
 	BaseURL string
 
+	// Parallel builds sibling nodes concurrently, at most GOMAXPROCS at a time.
+	// Output is identical either way — nodes write to disjoint paths, and a
+	// failure still reports the same node first — so the only thing that changes
+	// is wall time, and only on a site with enough pages to notice.
+	//
+	// It is opt-in because it moves your code onto other goroutines: Page, Files
+	// and Generate functions must be safe to call concurrently. Rendering templ
+	// components is; a Generate closure appending to a captured slice is not.
+	Parallel bool
+
 	// RelativeURLs makes Ctx.Asset, Ctx.Link and Ctx.InLocale emit URLs relative
 	// to the page rather than absolute ones, so the output works unchanged
 	// wherever it is served: opened from disk, at a localhost root, or under a

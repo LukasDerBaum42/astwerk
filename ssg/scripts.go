@@ -25,9 +25,13 @@ import (
 // in the same directory. When at least one .wasm is produced, Go's
 // wasm_exec.js glue is copied into outDir alongside it.
 //
-// A compiler failure returns its combined output as part of the error.
+// Each .wasm is compiled by its own go build process, and they run
+// concurrently: they write to different files and share nothing but the build
+// cache, which is already safe under concurrency. A compiler failure returns
+// its combined output as part of the error, and with several failing the error
+// is always the one earliest in directory order.
 func CompileScripts(srcDir, outDir string) error {
-	entries, err := os.ReadDir(srcDir)
+	jobs, tsFiles, err := scriptJobs(srcDir, outDir)
 	if err != nil {
 		return err
 	}
@@ -35,8 +39,36 @@ func CompileScripts(srcDir, outDir string) error {
 		return err
 	}
 
-	var tsFiles []string
-	wroteWasm := false
+	if err := inParallel(len(jobs), func(i int) error {
+		return buildWasm(jobs[i].src, jobs[i].out)
+	}); err != nil {
+		return err
+	}
+
+	if len(tsFiles) > 0 {
+		if err := compileTS(tsFiles, outDir); err != nil {
+			return err
+		}
+	}
+	if len(jobs) > 0 {
+		if err := copyWasmExec(outDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// wasmJob is one .wasm to produce: a source file or package directory, and
+// where its output goes.
+type wasmJob struct{ src, out string }
+
+// scriptJobs classifies srcDir's top-level entries. Reading build constraints
+// is cheap and sequential; only the compilers themselves are worth fanning out.
+func scriptJobs(srcDir, outDir string) (jobs []wasmJob, tsFiles []string, err error) {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	for _, e := range entries {
 		name := e.Name()
@@ -46,46 +78,27 @@ func CompileScripts(srcDir, outDir string) error {
 		case e.IsDir():
 			ok, err := dirHasWasmFile(src)
 			if err != nil {
-				return err
+				return nil, nil, err
 			}
-			if !ok {
-				continue
+			if ok {
+				jobs = append(jobs, wasmJob{src, filepath.Join(outDir, name+".wasm")})
 			}
-			if err := buildWasm(src, filepath.Join(outDir, name+".wasm")); err != nil {
-				return err
-			}
-			wroteWasm = true
 
 		case strings.HasSuffix(name, ".go"):
 			ok, err := isWasmFile(src)
 			if err != nil {
-				return err
+				return nil, nil, err
 			}
-			if !ok {
-				continue
+			if ok {
+				out := strings.TrimSuffix(name, ".go") + ".wasm"
+				jobs = append(jobs, wasmJob{src, filepath.Join(outDir, out)})
 			}
-			out := strings.TrimSuffix(name, ".go") + ".wasm"
-			if err := buildWasm(src, filepath.Join(outDir, out)); err != nil {
-				return err
-			}
-			wroteWasm = true
 
 		case strings.HasSuffix(name, ".ts"):
 			tsFiles = append(tsFiles, src)
 		}
 	}
-
-	if len(tsFiles) > 0 {
-		if err := compileTS(tsFiles, outDir); err != nil {
-			return err
-		}
-	}
-	if wroteWasm {
-		if err := copyWasmExec(outDir); err != nil {
-			return err
-		}
-	}
-	return nil
+	return jobs, tsFiles, nil
 }
 
 // buildWasm compiles a single Go file or package directory to a .wasm binary.
@@ -110,7 +123,7 @@ func buildWasm(src, out string) error {
 		target = "./" + target
 	}
 
-	cmd := exec.Command("go", "build", "-o", absOut, target)
+	cmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", absOut, target)
 	cmd.Dir = filepath.Dir(absSrc)
 	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
 	if b, err := cmd.CombinedOutput(); err != nil {
