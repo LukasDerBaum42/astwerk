@@ -5,19 +5,28 @@
 // It knows nothing about [ssg] — you hand it a Build function, and it calls it.
 // That keeps it a general watch-rebuild-reload loop rather than a second entry
 // point into the walker, and it means the same server works for a project whose
-// build does more than call [ssg.Build]:
+// build does more than call [ssg.Build].
+//
+// Build your site in a subprocess. A running Go program cannot load new code,
+// so a build that calls your page functions in-process will silently keep
+// rendering the components that were compiled into it — see [Config.Build].
+// [Command] and [Steps] exist for this:
 //
 //	func main() {
-//		if *serve {
-//			devserver.Run(context.Background(), devserver.Config{
-//				Build: func() error { return build(true) },
-//			})
+//		flag.Parse()
+//		if !*serve {
+//			build(*dev)   // the one-shot build; also what --serve shells out to
 //			return
 //		}
-//		build(false)
+//		devserver.Run(context.Background(), devserver.Config{
+//			Build: devserver.Steps(
+//				devserver.Command("templ", "generate"),
+//				devserver.Command("go", "run", ".", "--out", "build", "--dev"),
+//			),
+//		})
 //	}
 //
-// Pass a build that sets [ssg.BuildOptions.Dev], so the output directory is
+// Have that inner build set [ssg.BuildOptions.Dev], so the output directory is
 // overwritten in place rather than removed and recreated — a browser fetching
 // an asset mid-rebuild then never sees a missing file.
 //
@@ -61,6 +70,23 @@ type Config struct {
 	// Build regenerates the site. It is required, and it is called once before
 	// the server starts listening, so a broken build is reported immediately
 	// rather than after the first edit.
+	//
+	// Use [Command] or [Steps] unless you are certain you don't need to. A Go
+	// process cannot load new code, so a Build closure that calls your render
+	// functions directly will keep rendering the versions that were compiled
+	// into the running binary. Edit a .templ file and the watcher fires, the
+	// build "succeeds", the browser reloads — and the page is unchanged, which
+	// is worse than nothing happening at all, because it looks like it worked.
+	// Rebuilding out of process is what makes a code change take effect:
+	//
+	//	Build: devserver.Steps(
+	//		devserver.Command("templ", "generate"),
+	//		devserver.Command("go", "run", ".", "--out", "build", "--dev"),
+	//	)
+	//
+	// An in-process closure is correct only when everything the build reads is
+	// data — markdown, CSS, images — and never compiled Go. It is faster, and
+	// it is a trap the moment a .templ file enters the picture.
 	Build func() error
 
 	// Dir is the directory to serve. Defaults to [DefaultDir].
@@ -221,7 +247,15 @@ func watchLoop(ctx context.Context, cfg Config, hub *hub) {
 
 		cfg.Log.Printf("changed: %s, rebuilding", first)
 		start := time.Now()
-		if err := cfg.Build(); err != nil {
+		err := cfg.Build()
+
+		// Adopt whatever the build itself touched before looking again. A build
+		// that writes inside a watched directory — templ generate producing
+		// *_templ.go is the usual one — would otherwise see its own output as
+		// the next change and rebuild forever.
+		w.scan()
+
+		if err != nil {
 			cfg.Log.Printf("build failed: %v", err)
 			hub.buildError(err.Error())
 			continue

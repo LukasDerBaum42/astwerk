@@ -514,6 +514,172 @@ func TestRunSurvivesAFailingBuild(t *testing.T) {
 	}
 }
 
+func TestCommandReportsOutputOnFailure(t *testing.T) {
+	if err := Command("sh", "-c", "exit 0")(); err != nil {
+		t.Errorf("successful command returned %v", err)
+	}
+
+	err := Command("sh", "-c", "echo 'main.go:12: undefined: foo' >&2; exit 1")()
+	if err == nil {
+		t.Fatal("expected an error from a failing command")
+	}
+	// The compiler's message is the useful part, and it has to survive into the
+	// error so the browser overlay can show it.
+	if !strings.Contains(err.Error(), "undefined: foo") {
+		t.Errorf("error dropped the command output: %v", err)
+	}
+	if !strings.Contains(err.Error(), "sh -c") {
+		t.Errorf("error does not name the command: %v", err)
+	}
+}
+
+func TestCommandReportsAMissingBinary(t *testing.T) {
+	err := Command("astwerk-no-such-binary")()
+	if err == nil || !strings.Contains(err.Error(), "astwerk-no-such-binary") {
+		t.Errorf("err = %v, want it to name the missing binary", err)
+	}
+}
+
+func TestStepsRunInOrderAndStopAtFailure(t *testing.T) {
+	var ran []string
+	step := func(name string, err error) func() error {
+		return func() error { ran = append(ran, name); return err }
+	}
+
+	err := Steps(
+		step("one", nil),
+		nil, // skipped, not a panic
+		step("two", errors.New("boom")),
+		step("three", nil),
+	)()
+
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("err = %v, want boom", err)
+	}
+	if len(ran) != 2 || ran[0] != "one" || ran[1] != "two" {
+		t.Errorf("ran = %v, want [one two] — three must not run after a failure", ran)
+	}
+	if err := Steps()(); err != nil {
+		t.Errorf("Steps() with no steps = %v, want nil", err)
+	}
+}
+
+// The regression this whole subprocess business exists for: a build that
+// recompiles must actually change what the server serves.
+func TestRunPicksUpACodeChangeViaSubprocess(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "build")
+
+	// A tiny generator program standing in for a templ-backed site: the page
+	// text is compiled in, not read at runtime, so only a recompile can change
+	// it.
+	writeFile(t, filepath.Join(dir, "go.mod"), "module gen\n\ngo 1.25\n")
+	gen := filepath.Join(dir, "main.go")
+	page := func(text string) string {
+		return "package main\n\nimport (\"os\"; \"path/filepath\")\n\n" +
+			"const page = \"" + text + "\"\n\n" +
+			"func main() {\n" +
+			"\tos.MkdirAll(filepath.Join(os.Args[1]), 0755)\n" +
+			"\tos.WriteFile(filepath.Join(os.Args[1], \"index.html\"), []byte(\"<html><body>\"+page+\"</body></html>\"), 0644)\n" +
+			"}\n"
+	}
+	writeFile(t, gen, page("first"))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	addrs := make(chan string, 1)
+	go Run(ctx, Config{
+		Build:    Command("go", "run", gen, out),
+		Dir:      out,
+		Addr:     "localhost:0",
+		Watch:    []string{dir},
+		Interval: 10 * time.Millisecond,
+		Log:      log.New(io.Discard, "", 0),
+		Ready:    func(addr string) { addrs <- addr },
+	})
+
+	var addr string
+	select {
+	case addr = <-addrs:
+	case <-time.After(60 * time.Second):
+		t.Fatal("server never became ready")
+	}
+	base := "http://" + addr
+
+	if body := fetch(t, base+"/"); !strings.Contains(body, "first") {
+		t.Fatalf("initial page = %q", body)
+	}
+
+	// Change the compiled-in constant. An in-process build would keep serving
+	// "first" here forever.
+	writeFile(t, gen, page("second"))
+
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		if body := fetch(t, base+"/"); strings.Contains(body, "second") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a recompiled code change never reached the served page")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A build that writes into a watched directory must not trigger itself.
+func TestRunDoesNotLoopOnItsOwnOutput(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "build")
+	writeFile(t, filepath.Join(dir, "src.md"), "start")
+
+	var mu sync.Mutex
+	builds := 0
+	generated := filepath.Join(dir, "generated.go") // watched, and written by the build
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	addrs := make(chan string, 1)
+	go Run(ctx, Config{
+		Build: func() error {
+			mu.Lock()
+			builds++
+			n := builds
+			mu.Unlock()
+			// Rewrite a watched file with fresh content every time, the way a
+			// code generator would.
+			writeFile(t, generated, fmt.Sprintf("package main // build %d", n))
+			writeFile(t, filepath.Join(out, "index.html"), "<html><body>ok</body></html>")
+			return nil
+		},
+		Dir:      out,
+		Addr:     "localhost:0",
+		Watch:    []string{dir},
+		Interval: 10 * time.Millisecond,
+		Log:      log.New(io.Discard, "", 0),
+		Ready:    func(addr string) { addrs <- addr },
+	})
+
+	select {
+	case <-addrs:
+	case <-time.After(10 * time.Second):
+		t.Fatal("server never became ready")
+	}
+
+	writeFile(t, filepath.Join(dir, "src.md"), "edited")
+	time.Sleep(600 * time.Millisecond) // ~60 poll intervals
+
+	mu.Lock()
+	got := builds
+	mu.Unlock()
+	// One at startup, one for the edit. A few more would mean the debounce is
+	// loose; a runaway count means the build is retriggering on its own output.
+	if got > 4 {
+		t.Errorf("ran %d builds for one edit — the build is retriggering itself", got)
+	}
+}
+
 func fetch(t *testing.T, url string) string {
 	t.Helper()
 	resp, err := http.Get(url)

@@ -390,17 +390,28 @@ The loop you leave running while you work. Only `Build` is required:
 
 ```go
 devserver.Run(context.Background(), devserver.Config{
-	Build: func() error {
-		return ssg.Build(tree(), ssg.BuildOptions{Dev: true})
-	},
+	Build: devserver.Steps(
+		devserver.Command("templ", "generate"),
+		devserver.Command("go", "run", ".", "--dev"),
+	),
 })
 ```
 
 ```
-2026/07/30 21:19:52 serving build/ on http://127.0.0.1:8080
-2026/07/30 21:20:24 changed: content/docs/getting-started.md, rebuilding
-2026/07/30 21:20:27 rebuilt in 3.009s, reloading
+2026/07/30 23:28:03 serving build/ on http://127.0.0.1:8080
+2026/07/30 23:28:12 changed: templates/layout.templ, rebuilding
+2026/07/30 23:28:15 rebuilt in 3.701s, reloading
 ```
+
+**`Build` has to run out of process.** A running Go program cannot load new
+code, so a `Build` closure that calls your render functions directly keeps
+rendering the components compiled into the binary that started the server: you
+edit a `.templ`, the build "succeeds", the browser reloads, and nothing changed
+— which is worse than nothing happening, because it looks like it worked.
+`Command` and `Steps` shell out, which recompiles. `Command` puts the failed
+command's output in the error, so a compiler message reaches the browser
+overlay with file and line. An in-process closure is right only when the build
+reads nothing but data — markdown, CSS, images.
 
 It serves the build directory the way a static host will — a directory means its
 `index.html`, a missing path gets your own `404.html` with a 404 status — and
@@ -409,9 +420,8 @@ is written into the build output. A failed build doesn't stop the server: the
 error is logged and shown in the browser as an overlay, and the next successful
 build clears it.
 
-`Build` is called again on every change, so read your content *inside* it. Pass
-`Dev: true`, so a rebuild overwrites in place instead of removing the directory
-out from under a browser mid-request.
+Pass `--dev` to the inner build, so a rebuild overwrites in place instead of
+removing the directory out from under a browser mid-request.
 
 The watcher polls file size and modification time (300ms by default, configurable
 via `Interval`) rather than using OS file events. That keeps the dependency list

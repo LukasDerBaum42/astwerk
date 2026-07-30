@@ -578,6 +578,27 @@ The package deliberately imports nothing from `ssg` — `Config.Build` is a
 second entry point into the walker, and a build that also generates CSS or runs
 `templ generate` gets the same loop for free.
 
+**Correction, found immediately by using it.** The first version documented
+`Build` as an in-process closure calling `ssg.Build`. That is wrong for the
+case this library exists to serve: a running Go program cannot load new code,
+so editing a `.templ` re-rendered the components compiled into the binary that
+started the server. The watcher fired, the build reported success, the browser
+reloaded — and the page was unchanged. Silent and confidently wrong, which is
+worse than not detecting the change at all.
+
+The fix is `devserver.Command` and `devserver.Steps`: the build runs as a
+subprocess, so it recompiles. `Command` turns a non-zero exit into a build
+failure carrying the command's combined output, which means a compiler error
+reaches the browser overlay with file and line rather than only the terminal.
+The in-process form remains valid, but only when the build reads nothing but
+data — markdown, CSS, images — and the doc comments now say so at every point
+where someone would reach for it.
+
+This also forced a second fix: the watcher now re-baselines after every build,
+so output a build writes inside a watched directory — `templ generate`
+producing `*_templ.go` is the obvious case — cannot be mistaken for the next
+change and loop forever.
+
 ### 11.3 Smaller, more speculative gaps
 
 Lower priority than the two above, and each needs a concrete use case before
