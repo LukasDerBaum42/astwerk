@@ -39,10 +39,33 @@ func newWatcher(cfg Config) *watcher {
 	}
 }
 
+// changes is what one scan found, split by kind so the log can say which
+// happened rather than lumping them together as "something changed".
+type changes struct {
+	added    []string
+	modified []string
+	removed  []string
+}
+
+func (c changes) empty() bool { return c.count() == 0 }
+
+func (c changes) count() int { return len(c.added) + len(c.modified) + len(c.removed) }
+
+// first names one path for a one-line summary, preferring a modification since
+// that is what an edit-save-look loop is usually about.
+func (c changes) first() string {
+	for _, group := range [][]string{c.modified, c.added, c.removed} {
+		if len(group) > 0 {
+			return group[0]
+		}
+	}
+	return ""
+}
+
 // scan returns the paths that were added, modified or deleted since the last
 // call, sorted, and adopts the new state. The first call reports everything, so
 // callers prime it once at startup.
-func (w *watcher) scan() []string {
+func (w *watcher) scan() changes {
 	now := make(map[string]stamp, len(w.prev))
 
 	for _, root := range w.roots {
@@ -76,21 +99,27 @@ func (w *watcher) scan() []string {
 		})
 	}
 
-	var changed []string
+	var out changes
 	for path, s := range now {
-		if old, ok := w.prev[path]; !ok || old != s {
-			changed = append(changed, path)
+		old, existed := w.prev[path]
+		switch {
+		case !existed:
+			out.added = append(out.added, path)
+		case old != s:
+			out.modified = append(out.modified, path)
 		}
 	}
 	for path := range w.prev {
 		if _, ok := now[path]; !ok {
-			changed = append(changed, path)
+			out.removed = append(out.removed, path)
 		}
 	}
 
 	w.prev = now
-	sort.Strings(changed)
-	return changed
+	sort.Strings(out.added)
+	sort.Strings(out.modified)
+	sort.Strings(out.removed)
+	return out
 }
 
 // skipDir reports whether a directory should not be descended into. Names are

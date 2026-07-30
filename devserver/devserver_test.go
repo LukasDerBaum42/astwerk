@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -54,7 +55,7 @@ func get(t *testing.T, srv *httptest.Server, path string) (*http.Response, strin
 
 func testServer(t *testing.T, dir string) (*httptest.Server, *hub) {
 	t.Helper()
-	h := newHub()
+	h := newHub(newLogger(log.New(io.Discard, "", 0), true))
 	srv := httptest.NewServer(handler(dir, h))
 	t.Cleanup(srv.Close)
 	t.Cleanup(h.close)
@@ -274,7 +275,7 @@ func TestBuildErrorIsReplayedToANewSubscriber(t *testing.T) {
 }
 
 func TestSuccessfulBuildClearsTheStoredError(t *testing.T) {
-	h := newHub()
+	h := newHub(newLogger(log.New(io.Discard, "", 0), true))
 	defer h.close()
 
 	h.buildError("boom")
@@ -290,7 +291,7 @@ func TestSuccessfulBuildClearsTheStoredError(t *testing.T) {
 }
 
 func TestHubDeliversToEverySubscriber(t *testing.T) {
-	h := newHub()
+	h := newHub(newLogger(log.New(io.Discard, "", 0), true))
 	defer h.close()
 
 	a, releaseA := h.subscribe()
@@ -314,33 +315,69 @@ func TestHubDeliversToEverySubscriber(t *testing.T) {
 	h.reload() // must not panic on the closed subscriber
 }
 
+// The three kinds must be told apart, because the log reports them differently
+// and a deletion is not an edit.
 func TestWatcherReportsCreateModifyDelete(t *testing.T) {
 	dir := t.TempDir()
 	w := newWatcher(Config{Dir: filepath.Join(dir, "build"), Watch: []string{dir},
 		Exts: DefaultExts, Ignore: DefaultIgnore})
 	w.scan()
 
+	only := func(t *testing.T, kind string, got []string, other ...[]string) {
+		t.Helper()
+		if len(got) != 1 {
+			t.Fatalf("%s: got %v, want exactly one path", kind, got)
+		}
+		for _, o := range other {
+			if len(o) != 0 {
+				t.Fatalf("%s: also reported %v", kind, o)
+			}
+		}
+	}
+
 	page := filepath.Join(dir, "content", "post.md")
 	writeFile(t, page, "one")
-	if got := w.scan(); len(got) != 1 || got[0] != page {
-		t.Fatalf("create: changed = %v, want [%s]", got, page)
+	c := w.scan()
+	only(t, "create", c.added, c.modified, c.removed)
+	if c.added[0] != page {
+		t.Fatalf("create: added = %v, want [%s]", c.added, page)
 	}
-	if got := w.scan(); len(got) != 0 {
-		t.Fatalf("second scan reported %v, want nothing", got)
+
+	if c := w.scan(); !c.empty() {
+		t.Fatalf("second scan reported %d changes, want none", c.count())
 	}
 
 	// Size is part of the stamp, so a same-second edit of a different length
 	// registers without waiting for the clock.
 	writeFile(t, page, "one two three")
-	if got := w.scan(); len(got) != 1 || got[0] != page {
-		t.Fatalf("modify: changed = %v, want [%s]", got, page)
-	}
+	c = w.scan()
+	only(t, "modify", c.modified, c.added, c.removed)
 
 	if err := os.Remove(page); err != nil {
 		t.Fatal(err)
 	}
-	if got := w.scan(); len(got) != 1 || got[0] != page {
-		t.Fatalf("delete: changed = %v, want [%s]", got, page)
+	c = w.scan()
+	only(t, "delete", c.removed, c.added, c.modified)
+	if c.first() != page {
+		t.Errorf("first() = %q, want %q", c.first(), page)
+	}
+}
+
+// first() names a modification ahead of an addition, since an edit-save loop is
+// what the summary line is usually about.
+func TestChangesFirstPrefersAModification(t *testing.T) {
+	c := changes{added: []string{"new.md"}, modified: []string{"edited.md"}, removed: []string{"gone.md"}}
+	if got := c.first(); got != "edited.md" {
+		t.Errorf("first() = %q, want edited.md", got)
+	}
+	if got := (changes{added: []string{"new.md"}}).first(); got != "new.md" {
+		t.Errorf("first() with only an addition = %q", got)
+	}
+	if got := (changes{}).first(); got != "" {
+		t.Errorf("first() on nothing = %q, want empty", got)
+	}
+	if !(changes{}).empty() || (changes{added: []string{"x"}}).empty() {
+		t.Error("empty() is wrong")
 	}
 }
 
@@ -357,8 +394,8 @@ func TestWatcherIgnoresUnwatchedFilesAndDirs(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "notes.txt"), "not a source file")
 	writeFile(t, filepath.Join(dir, "photo.png"), "\x89PNG")
 
-	if got := w.scan(); len(got) != 0 {
-		t.Errorf("changed = %v, want nothing", got)
+	if c := w.scan(); !c.empty() {
+		t.Errorf("changed = %d files, want nothing", c.count())
 	}
 }
 
@@ -369,16 +406,73 @@ func TestWatcherWatchesADotDirectoryAskedForByName(t *testing.T) {
 
 	w := newWatcher(Config{Dir: filepath.Join(dir, "build"), Watch: []string{root},
 		Exts: DefaultExts, Ignore: DefaultIgnore})
-	if got := w.scan(); len(got) != 1 {
-		t.Fatalf("first scan = %v, want the one file in the watched root", got)
+	if c := w.scan(); c.count() != 1 {
+		t.Fatalf("first scan = %d files, want the one file in the watched root", c.count())
 	}
 }
 
 func TestWatcherSurvivesAMissingRoot(t *testing.T) {
 	w := newWatcher(Config{Dir: "build", Watch: []string{filepath.Join(t.TempDir(), "nope")},
 		Exts: DefaultExts, Ignore: DefaultIgnore})
-	if got := w.scan(); len(got) != 0 {
-		t.Errorf("changed = %v, want nothing", got)
+	if c := w.scan(); !c.empty() {
+		t.Errorf("changed = %d files, want nothing", c.count())
+	}
+}
+
+func TestLogFormat(t *testing.T) {
+	var buf strings.Builder
+	lg := newLogger(log.New(&buf, "", 0), true)
+	lg.event(colorGreen, tagBuild, "ok (%s)", 42*time.Millisecond)
+
+	line := strings.TrimRight(buf.String(), "\n")
+	if strings.Contains(line, "\033[") {
+		t.Errorf("colour leaked into a non-terminal log: %q", line)
+	}
+	// [15:04:05] [BUILD] ok (42ms)
+	want := regexp.MustCompile(`^\[\d\d:\d\d:\d\d\] \[BUILD\] ok \(42ms\)$`)
+	if !want.MatchString(line) {
+		t.Errorf("line = %q, want it to match %s", line, want)
+	}
+}
+
+func TestLogColorIsOffWhenNotATerminal(t *testing.T) {
+	if newLogger(log.New(io.Discard, "", 0), false).color {
+		t.Error("colour enabled for a non-file writer")
+	}
+	if newLogger(log.New(os.Stderr, "", 0), true).color {
+		t.Error("NoColor was ignored")
+	}
+	t.Setenv("NO_COLOR", "1")
+	if newLogger(log.New(os.Stderr, "", 0), false).color {
+		t.Error("NO_COLOR was ignored")
+	}
+}
+
+// A big batch is summarised rather than scrolling the terminal away.
+func TestLogChangesSummarisesLargeBatches(t *testing.T) {
+	var buf strings.Builder
+	lg := newLogger(log.New(&buf, "", 0), true)
+
+	var many changes
+	for i := range 25 {
+		many.modified = append(many.modified, fmt.Sprintf("f%02d.md", i))
+	}
+	logChanges(lg, many)
+
+	if n := strings.Count(buf.String(), "\n"); n != 1 {
+		t.Errorf("logged %d lines for 25 files, want a single summary", n)
+	}
+	if !strings.Contains(buf.String(), "25 files") {
+		t.Errorf("summary does not give the count: %q", buf.String())
+	}
+
+	buf.Reset()
+	logChanges(lg, changes{added: []string{"a.md"}, modified: []string{"b.md"}, removed: []string{"c.md"}})
+	out := buf.String()
+	for _, tag := range []string{"[NEW] a.md", "[CHANGED] b.md", "[DELETED] c.md"} {
+		if !strings.Contains(out, tag) {
+			t.Errorf("missing %q in:\n%s", tag, out)
+		}
 	}
 }
 

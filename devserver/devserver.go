@@ -42,6 +42,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -117,8 +119,22 @@ type Config struct {
 	// dependency and the platform-specific failure modes that come with one.
 	Interval time.Duration
 
-	// Log receives build and reload messages. Defaults to [log.Default].
+	// Log receives build, watch and reload messages, one tagged line each:
+	//
+	//	[23:28:12] [CHANGED] templates/layout.templ
+	//	[23:28:12] [BUILD]   rebuilding
+	//	[23:28:15] [BUILD]   ok (3.701s)
+	//	[23:28:15] [RELOAD]  sent to 1 client
+	//
+	// Defaults to a logger writing to standard error with no flags of its own,
+	// since the timestamp is part of the line. A logger you supply keeps its
+	// own prefix and flags, so it can slot into a project's existing logging —
+	// at the cost of a second timestamp if it has one.
 	Log *log.Logger
+
+	// NoColor turns off ANSI colour. Colour is off automatically when the log
+	// is not a terminal, and when NO_COLOR is set in the environment.
+	NoColor bool
 
 	// Ready, if set, is called with the address the server actually bound once
 	// it is listening. Mainly for tests.
@@ -148,7 +164,7 @@ func (c *Config) applyDefaults() error {
 		c.Interval = DefaultInterval
 	}
 	if c.Log == nil {
-		c.Log = log.Default()
+		c.Log = log.New(os.Stderr, "", 0)
 	}
 	return nil
 }
@@ -168,23 +184,28 @@ func Run(ctx context.Context, cfg Config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	hub := newHub()
+	lg := newLogger(cfg.Log, cfg.NoColor)
+	hub := newHub(lg)
 	defer hub.close()
 
 	// The first build is reported but not fatal: a project with a broken build
 	// still wants the server up, showing the error, so fixing it reloads.
-	if err := cfg.Build(); err != nil {
-		cfg.Log.Printf("build failed: %v", err)
-		hub.buildError(err.Error())
-	} else {
-		cfg.Log.Printf("built %s/", cfg.Dir)
-	}
+	lg.event(colorCyan, tagStart, "initial build")
+	runBuild(cfg, lg, hub)
 
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
+		lg.event(colorRed, tagError, "cannot listen on %s: %v", cfg.Addr, err)
 		return fmt.Errorf("devserver: listen on %s: %w", cfg.Addr, err)
 	}
 	defer ln.Close()
+
+	if _, err := os.Stat(cfg.Dir); err != nil {
+		// Not fatal — the next successful build may create it — but silence
+		// here means every request 404s for a reason that isn't obvious.
+		lg.event(colorYellow, tagError,
+			"%s/ does not exist yet; check that the build writes there", cfg.Dir)
+	}
 
 	srv := &http.Server{Handler: handler(cfg.Dir, hub)}
 	errc := make(chan error, 1)
@@ -194,27 +215,78 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}()
 
-	cfg.Log.Printf("serving %s/ on http://%s", cfg.Dir, ln.Addr())
+	lg.event(colorGreen, tagServer, "http://%s  (serving %s/)", ln.Addr(), cfg.Dir)
+	lg.event(colorCyan, tagWatch, "%s  (every %s)",
+		strings.Join(cfg.Watch, ", "), cfg.Interval)
+	lg.event(colorCyan, tagWatch, "extensions: %s", strings.Join(cfg.Exts, " "))
+	lg.event(colorCyan, tagWatch, "ignoring: %s, %s/", strings.Join(cfg.Ignore, ", "), cfg.Dir)
+	lg.event(colorCyan, tagInfo, "press Ctrl+C to stop")
+
 	if cfg.Ready != nil {
 		cfg.Ready(ln.Addr().String())
 	}
 
-	go watchLoop(ctx, cfg, hub)
+	go watchLoop(ctx, cfg, lg, hub)
 
 	select {
 	case <-ctx.Done():
 	case err = <-errc:
+		lg.event(colorRed, tagError, "server stopped: %v", err)
 	}
 
+	lg.event(colorYellow, tagStop, "shutting down")
 	shutdown, stop := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer stop()
 	srv.Shutdown(shutdown)
 	return err
 }
 
+// runBuild runs one build, timing it and reporting the outcome to both the log
+// and the browser.
+func runBuild(cfg Config, lg *logger, hub *hub) (ok bool) {
+	lg.event(colorYellow, tagBuild, "building")
+
+	start := time.Now()
+	err := cfg.Build()
+	elapsed := time.Since(start).Round(time.Millisecond)
+
+	if err != nil {
+		// A build run through Command has already streamed its own output to
+		// the terminal, so the line here is the verdict rather than a repeat of
+		// it. The full text goes to the browser overlay.
+		lg.event(colorRed, tagBuild, "failed (%s)", elapsed)
+		hub.buildError(err.Error())
+		return false
+	}
+	lg.event(colorGreen, tagBuild, "ok (%s)", elapsed)
+	return true
+}
+
+// logChanges reports what the watcher saw, one line per file so a rebuild can
+// always be traced back to the edit that caused it. A large batch — switching
+// branches, say — is summarised instead of scrolling the terminal away.
+func logChanges(lg *logger, c changes) {
+	const maxListed = 10
+
+	if c.count() > maxListed {
+		lg.event(colorYellow, tagChanged, "%d files (%d new, %d modified, %d deleted)",
+			c.count(), len(c.added), len(c.modified), len(c.removed))
+		return
+	}
+	for _, p := range c.added {
+		lg.event(colorGreen, tagNew, "%s", p)
+	}
+	for _, p := range c.modified {
+		lg.event(colorYellow, tagChanged, "%s", p)
+	}
+	for _, p := range c.removed {
+		lg.event(colorRed, tagDeleted, "%s", p)
+	}
+}
+
 // watchLoop rebuilds whenever the watcher reports a change, and tells the
 // browsers what happened either way.
-func watchLoop(ctx context.Context, cfg Config, hub *hub) {
+func watchLoop(ctx context.Context, cfg Config, lg *logger, hub *hub) {
 	w := newWatcher(cfg)
 	w.scan() // the state at startup is not a change
 
@@ -228,26 +300,29 @@ func watchLoop(ctx context.Context, cfg Config, hub *hub) {
 		case <-ticker.C:
 		}
 
-		changed := w.scan()
-		if len(changed) == 0 {
+		found := w.scan()
+		if found.empty() {
 			continue
 		}
-		first := changed[0]
 
 		// Wait for a quiet tick before building: an editor saving several files,
 		// or writing one file in two steps, should be one rebuild and not two.
-		for len(changed) > 0 {
+		// Anything that lands while waiting is part of the same edit, so it is
+		// reported alongside the first batch rather than triggering a second.
+		for more := found; !more.empty(); {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
 			}
-			changed = w.scan()
+			more = w.scan()
+			found.added = append(found.added, more.added...)
+			found.modified = append(found.modified, more.modified...)
+			found.removed = append(found.removed, more.removed...)
 		}
 
-		cfg.Log.Printf("changed: %s, rebuilding", first)
-		start := time.Now()
-		err := cfg.Build()
+		logChanges(lg, found)
+		ok := runBuild(cfg, lg, hub)
 
 		// Adopt whatever the build itself touched before looking again. A build
 		// that writes inside a watched directory — templ generate producing
@@ -255,12 +330,8 @@ func watchLoop(ctx context.Context, cfg Config, hub *hub) {
 		// the next change and rebuild forever.
 		w.scan()
 
-		if err != nil {
-			cfg.Log.Printf("build failed: %v", err)
-			hub.buildError(err.Error())
-			continue
+		if ok {
+			hub.reload()
 		}
-		cfg.Log.Printf("rebuilt in %s, reloading", time.Since(start).Round(time.Millisecond))
-		hub.reload()
 	}
 }

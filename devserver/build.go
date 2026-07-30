@@ -1,7 +1,10 @@
 package devserver
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -18,15 +21,24 @@ import (
 //	Build: devserver.Command("go", "run", ".", "--out", "build", "--dev")
 func Command(name string, args ...string) func() error {
 	return func() error {
-		out, err := exec.Command(name, args...).CombinedOutput()
-		if err == nil {
-			return nil
-		}
 		label := strings.Join(append([]string{name}, args...), " ")
-		if len(out) == 0 {
-			return fmt.Errorf("%s: %w", label, err)
+		fmt.Fprintf(os.Stderr, "  $ %s\n", label)
+
+		// Streamed and captured at once: the terminal shows a long build as it
+		// happens, and the copy still goes into the error so a compiler message
+		// can reach the browser overlay.
+		var buf bytes.Buffer
+		cmd := exec.Command(name, args...)
+		cmd.Stdout = io.MultiWriter(os.Stderr, &buf)
+		cmd.Stderr = cmd.Stdout
+
+		if err := cmd.Run(); err != nil {
+			if buf.Len() == 0 {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+			return fmt.Errorf("%s: %w\n\n%s", label, err, buf.String())
 		}
-		return fmt.Errorf("%s: %w\n\n%s", label, err, out)
+		return nil
 	}
 }
 
