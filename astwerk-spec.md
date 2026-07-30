@@ -741,6 +741,14 @@ should read like markup with live values in it, JSX-style; WASM stays
 available, in full, for the cases that need it, but stops being the only way
 to do the common 90%.
 
+**Two candidate mechanisms, one surface.** §12.1 describes what the author
+writes, and that part is settled either way. What sits underneath is not:
+§12.2 transpiles Go to JS in a build pass, and §12.6 emits JS directly from
+ordinary Go functions at render time, with no build pass at all. The second is
+much cheaper and removes this design's one genuinely unproven step, at the cost
+of a narrower language for handler logic. §12.7 says which to try first and
+what would decide between them.
+
 ### 12.1 What it looks like
 
 Reactive bindings are ordinary-looking templ expressions, written directly
@@ -775,6 +783,12 @@ call sites into live bindings; skipping it costs interactivity, never
 correctness.
 
 ### 12.2 How a call site becomes a live binding
+
+**Superseded as the first thing to try — see §12.6.** This section describes
+the transpiler mechanism, which is one of two candidates. The other emits JS
+directly at render time and needs no build pass at all; §12.7 now starts
+there. Keep reading this for the design it would replace, and for the specific
+risk (the last paragraph) that motivated looking for an alternative.
 
 Two passes, not one, because assigning a stable DOM anchor and finding the
 Go logic to run when it fires are different problems:
@@ -848,17 +862,122 @@ somewhere less obvious). Whatever it's actually called should say "the
 default, lightweight path" next to `reactive` reading as "the complete,
 WASM-backed path" — bikeshed later.
 
-### 12.6 Suggested order of attack
+### 12.6 The transpiler may not be needed: emit the JS instead
 
-1. **Spike the anchor/extraction mechanism alone**, against nothing more
-   than the counter example: `x.Text`, `x.On`, straight-line markup only, no
-   conditionals. This is the one piece of the whole design that's genuinely
-   novel and unproven — everything else (the transpiled Go subset, the
-   vendored runtime's signal semantics) is a smaller, more mechanical version
-   of work already done for §11.4 and `reactive` respectively.
-2. Once anchors work, build out the v1 transpiled subset (§12.3) against the
-   existing Examples page demos as the test corpus — they're already written
-   against `reactive`'s API, so porting them to `astwerk/x` is a natural
-   acceptance test.
-3. Only then decide whether conditional/looped marker placement is worth
-   solving, based on how much v1 actually needed it in practice.
+§12.2 assumes a transpiler — a build pass that reads generated Go with
+`go/ast` and turns the expression at each marker into JS. That is the
+expensive, unproven half of this design, and it is the part most likely to
+fail.
+
+There is a cheaper mechanism that deletes it rather than solving it: **make the
+markers ordinary Go functions that produce JS as they render.** No build pass,
+no `go/ast`, no transpiled subset of Go.
+
+The reason this fits templ so well is what a templ component already is — a
+function that writes to an `io.Writer`, carrying a `context.Context` through
+every nested call. So `@x.Text(count)` can, in the same call, write
+
+```html
+<span data-x="7">42</span>
+```
+
+into the page *and* append
+
+```js
+x.text("7", count)
+```
+
+to a script buffer hanging off that context, flushed once before `</body>`.
+One pass, at ordinary SSG render time, with `templ generate && go build` as the
+entire toolchain.
+
+**What this removes is exactly the risky part.** §12.2 needs a render-time
+counter and a static source walk to independently produce the same sequence,
+and admits that markers inside an `if` or a `for` are "the open risk in this
+design". Here there is no second sequence to agree with: the anchor and the
+code that uses it are produced by the same call, so a marker inside a
+conditional emits its JS when — and only when — it renders. A marker in a loop
+emits once per iteration, correctly, for free. The problem isn't solved, it
+stops existing.
+
+It also collapses §12.1's two modes into one. There is no "with the transpile
+step" versus "without" — the marker always renders the current value as HTML,
+and always emits its wiring. Nothing to skip, nothing to fall back to.
+
+**What it costs is the authoring model for logic.** In §12.2, `increment` is a
+plain Go closure and the transpiler's whole job is making that run in a
+browser. Without a transpiler, a handler has to be something that *produces*
+JS, which realistically means a small typed expression builder:
+
+```go
+var count = x.NewSignal(0)
+
+templ Counter() {
+	<div>
+		@x.Text(count)
+		<button onclick={ x.On(count.Set(count.Add(1))) }>+</button>
+	</div>
+}
+```
+
+`count.Add(1)` returns an `x.Expr[int]` that renders to JS rather than
+computing anything in Go. That is strictly less expressive than real Go, and
+it is the entire trade: you give up arbitrary logic in a handler to get rid of
+a compiler.
+
+Whether that trade is good depends on how much of §12.3's v1 scope is really
+*logic* rather than *binding* — and most of it is binding. `Text`, `Attr`,
+`Class`, `Show`, `Value`/`Checked`/`Number` and `List` carry no user logic at
+all; they are wiring, and wiring is exactly what a JS-emitting function does
+well. `On` is the one that wants real code, and in practice most handlers are
+"toggle this", "increment that", "set this from that field" — reachable with a
+handful of combinators. Anything past that is what §12.3's unconditional
+escape hatch is already for: a normal WASM script via `CompileFrom`, with the
+full `reactive`/`wasmwrap` API.
+
+**Where it could go wrong, and what to watch:**
+
+- **The combinator set is a slope.** Every "just one more operator" is a step
+  toward a badly-designed Lisp embedded in Go. It needs a hard, stated
+  ceiling — and the honest rule is that when an expression stops reading like
+  the JS it produces, the answer is WASM, not another combinator.
+- **Typing is only partial.** `count.Add(1)` can be type-safe in Go, but Go
+  cannot check that the emitted JS means what the Go signature implies. That
+  correspondence is the vendored runtime's (§12.4) job to keep, and it is
+  exactly the kind of thing that needs tests on both sides.
+- **The wiring is per-page markup, not a cacheable asset.** The shared runtime
+  is still one static file, but the emitted calls live inline in each page.
+  That is a few hundred bytes rather than the megabytes §11.4 is about, so it
+  is almost certainly the right side of the trade — but it is a real
+  difference from a bundle, and worth measuring rather than assuming.
+- **Escaping is now a correctness problem, not a styling one.** Emitting JS
+  into HTML means `</script>`, quotes and user-supplied strings all have to be
+  escaped properly, or a content value becomes an injection. templ's own
+  escaping does not cover a string being spliced into JS.
+
+This does not replace §12.1's *surface* — the markers, the call sites, what
+the author writes in the template — only the mechanism underneath. If the
+emitter turns out to be too limited, the same markers can be backed by the
+transpiler later, and call sites won't move.
+
+### 12.7 Suggested order of attack
+
+Revised: §12.6 changes what to try first. The transpiler is no longer step one,
+because there may be no transpiler.
+
+1. **Spike the JS-emitting mechanism (§12.6)** against the counter example:
+   `x.Text` and `x.On`, one signal, one handler, a vendored runtime with a
+   `signal` and a `text` binding. The question to answer is narrow and
+   concrete — can a marker write its own anchor and its own wiring in one
+   render pass, and does the script buffer survive templ's context threading
+   cleanly? Then immediately try the case §12.2 could not promise: a marker
+   inside an `if` and inside a `for`.
+2. **Find the ceiling of the combinator set** by porting the existing Examples
+   page demos, which are already written against `reactive`'s API. The
+   interesting output is not "did it work" but *which* demos needed something
+   the combinators couldn't say — that list is the real argument for or
+   against a transpiler.
+3. **Only if step 2 says the ceiling is too low**, revisit §12.2's transpiler
+   — the anchor/extraction spike, the transpiled Go subset, and the
+   conditional-placement problem, in that order. The markers from step 1 stay;
+   only what is underneath them changes.
