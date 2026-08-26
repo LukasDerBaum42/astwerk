@@ -29,8 +29,9 @@ content/    Load, LoadDir, LoadTree, Decode, Slugs, Chunk
 devserver/  watch, rebuild, live reload
 wasmwrap/   DOM, style, events, timers, fetch, canvas   (js/wasm only)
 reactive/   signals, bindings, keyed lists, router, resources, templ interop
+x/          compiled reactive markup — JS emitted at build time, no WASM
 jsdom/      fake DOM for testing bindings without a browser  (js/wasm only)
-starter/    13 copyable .templ files — see starter/README.md
+starter/    17 copyable .templ files — see starter/README.md
 ```
 
 `astwerk-spec.md` is the original design sheet. Sections 2, 4, 6a and 9 describe
@@ -432,7 +433,53 @@ same loop with no extra plumbing.
 
 ---
 
-## `reactive` — interactive UI
+## `x` — compiled reactive markup
+
+Interactive UI without WASM and without a JS framework. Markers are ordinary Go
+functions that render at the exact spot they are used, owning the element they
+produce: `@x.Text(count)` writes the value *and* the JavaScript that keeps it
+in sync, in the same call. There is no build pass, no transpiler, and nothing
+to re-render client-side.
+
+```go
+var count = x.NewSignal(0)
+```
+
+```templ
+templ Counter(title string, path string, prefix string) {
+	@layout.BaseLayout(title, path, prefix) {
+		@x.Document(counter())
+	}
+}
+
+templ counter() {
+	<div>
+		@x.Text(count)
+		@x.El("button", x.On("click", count.Set(count.Add(1)))) {
+			+
+		}
+	</div>
+}
+```
+
+`x.Document` emits a small runtime and the state declarations before the
+markup, and the bindings after it; outside a Document the markers render plain
+static HTML, so reactivity is opt-in and pages read fine with JavaScript
+disabled. The runtime is assembled per page from fragments, so a counter page
+ships roughly the runtime for a counter — not a framework.
+
+The marker set: `Text`, `El` with bindings (`On`, `Attr`, `Class`, `Disabled`,
+`Show`, `Style`), two-way forms (`Input`, `Number`, `Checkbox`), `Computed`,
+`Effect`, `When` and keyed `List`. Handlers are built from a small combinator
+set (`count.Set(count.Add(1))`, `x.Lit`, `x.Not`); anything past that is a
+`<script>` reading `x.Named("count", 0)` signals directly — the escape hatch,
+not a wall. See the `widgets/` starter files for a full example.
+
+`x` and the WASM `reactive` package are two implementations of the same
+reactive model. `x` is the lightweight path for the common 90%; WASM stays
+available for anything that needs full Go in the browser.
+
+## `reactive` — interactive UI (WASM)
 
 Opt-in, on top of `wasmwrap`. Fine-grained rather than virtual-DOM: a binding
 updates exactly the property it owns, and a keyed list moves nodes rather than
@@ -528,8 +575,9 @@ with the right arguments", which is what a binding test is actually asking.
 
 ## `starter/`
 
-13 copyable `.templ` files — layouts, a list+detail collection, pages, wasm
-hosts, SEO and RSS. Not importable and not wired into `Build`: you copy them in
+17 copyable `.templ` files — layouts, a list+detail collection, pages, wasm
+hosts, the `widgets/` reactive components, SEO and RSS. Not importable and not
+wired into `Build`: you copy them in
 and they become your code. See [starter/README.md](starter/README.md).
 
 ## Non-goals

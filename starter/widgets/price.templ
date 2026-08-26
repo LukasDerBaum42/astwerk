@@ -1,0 +1,21 @@
+// Copyright (c) 2026 LukasDerBaum42. MIT licensed — copy and edit freely.
+package widgets
+
+import x "github.com/LukasDerBaum42/astwerk/x"
+
+// Price and Qty are two-way bound number inputs; Total is derived from them.
+var Price = x.NewSignal(10.0)
+var Qty = x.NewSignal(2.0)
+var Total = x.Computed(Price.Mul(Qty))
+
+// PriceForm shows a computed value over two two-way inputs: editing either
+// field recomputes the total in the browser, and setting a field from code
+// would update it in turn.
+templ PriceForm() {
+	<div class="price">
+		@x.Number(Price)
+		@x.Number(Qty)
+		<span>total: </span>
+		@x.Text(Total)
+	</div>
+}
