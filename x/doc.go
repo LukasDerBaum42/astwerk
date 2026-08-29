@@ -3,41 +3,43 @@
 // interactive, with no virtual DOM, no framework, and no Go/WASM in the
 // browser.
 //
-// Markers are plain Go functions that render at the exact spot they are used.
-// Each owns the element it renders, so it can stamp it with an internal id and
-// append its wiring to a script buffer in the same call — there is no build
-// pass, no selector to keep in sync, and nothing to re-render client-side.
+// State is one of four split types, each exposing only the operations
+// meaningful for its value: [NumSignal] (int/int64/float64), [BoolSignal],
+// [StrSignal] and [ListSignal]. Constructors are [NewNumSignal] and its
+// [NamedNumSignal] siblings; [Computed] derives a read-only [Memo].
 //
-// A reactive page is a [Document] wrapping a component:
-//
-//	var count = x.NewSignal(0)
+//	var count = x.NewNumSignal(0)
+//	var open  = x.NewBoolSignal(false)
 //
 //	templ Counter() {
 //		<div>
-//			@x.Text(count)
-//			@x.El("button", x.On("click", count.Set(count.Add(1)))) {
-//				+
-//			}
+//			@count
+//			@x.El("button", x.HtmlAttr("class", "btn"), x.On("click", count.Dec(1))) { - }
+//			@x.El("button", x.HtmlAttr("class", "btn"), x.On("click", count.Inc(1))) { + }
 //		</div>
 //	}
 //
-// Text and the form markers (Input, Number, Checkbox) own the element they
-// render. For elements that carry reactive attributes, styles or events
-// instead, use [El] with bindings ([Attr], [Class], [Disabled], [Show],
-// [Style], [On]). Values are derived with [Computed]; arbitrary browser work
-// runs through [Effect]; structure changes through [When] and [List].
+// A signal is a [Value], which also satisfies [templ.Component] — @count and
+// @count.Text() render the same bound span. Form markers are methods:
+// @draft.Input(), @price.Number(), @agreed.Checkbox(). Expressions are
+// package functions: [Add], [Sub], [Mul], [Div], [Concat], [Gt], [Lt], [Gte],
+// [Lte], [Eq], [Ne], [Not], [Lit]. Handlers are actions built by the signal
+// methods ([Set], [SetTo], [Inc], [Dec], [Toggle]) and composed with [Seq] and
+// [If].
 //
-// Rendered inside a [Document] the markers emit live bindings; rendered
-// without one they fall back to static HTML, which is what makes reactivity
-// opt-in rather than a rewrite of the whole page. State that is never used in
-// markup emits no JavaScript at all.
+// Elements carry bindings through [El] or [Wrap]: [HtmlAttr], [Attr], [Class],
+// [Disabled], [Show], [Style] and [On]. Structure changes through [When] and
+// [List]; arbitrary browser work runs through [Effect] and [Script].
 //
-// The generated JavaScript is split into two scripts around the body: the
-// runtime and state declarations load first, so any <script> in the page can
-// read reactive state; the bindings load last, once the DOM exists. Signals
-// created with [Named] keep their name in the generated code, so hand-written
-// scripts and effects can reference them directly. Both depend on a small
-// vendored runtime (see runtime.go), assembled per page from fragments so only
-// the pieces a page uses are shipped; pass [Minified] to [Document] for
-// compact production output.
+// A reactive page is a [Document] wrapping a component. Markers rendered
+// inside a [Document] emit live bindings; rendered without one they fall back
+// to static HTML, which is what makes reactivity opt-in. State that is never
+// used in markup emits no JavaScript at all. The generated JavaScript is split
+// into two scripts around the body: the runtime and state declarations load
+// first, so any <script> in the page can read reactive state; the bindings
+// load last, once the DOM exists. Signals created with a Named constructor
+// keep their name in the generated code, so hand-written scripts and effects
+// can reference them directly. The runtime is assembled per page from
+// fragments so only the pieces a page uses are shipped; pass [Minified] to
+// [Document] for compact production output.
 package x

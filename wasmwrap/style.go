@@ -33,11 +33,20 @@ func (e Element) Computed(prop string) string {
 	return cs.Call("getPropertyValue", prop).String()
 }
 
-func (s Style) Display(v string) Style    { return s.Set("display", v) }
-func (s Style) Color(v string) Style      { return s.Set("color", v) }
+// Display sets the CSS display property — "none" hides the element.
+func (s Style) Display(v string) Style { return s.Set("display", v) }
+
+// Color sets the CSS color property, the element's text color.
+func (s Style) Color(v string) Style { return s.Set("color", v) }
+
+// Background sets the CSS background property, a color or an image.
 func (s Style) Background(v string) Style { return s.Set("background", v) }
-func (s Style) Opacity(v string) Style    { return s.Set("opacity", v) }
-func (s Style) Overflow(v string) Style   { return s.Set("overflow", v) }
+
+// Opacity sets the CSS opacity property, 0 (transparent) to 1 (opaque).
+func (s Style) Opacity(v string) Style { return s.Set("opacity", v) }
+
+// Overflow sets the CSS overflow property — "hidden" clips, "auto" scrolls.
+func (s Style) Overflow(v string) Style { return s.Set("overflow", v) }
 
 // Size sets width and height. An empty string leaves that dimension alone.
 func (s Style) Size(width, height string) Style {

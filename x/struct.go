@@ -61,11 +61,12 @@ func When(cond Value[bool], subtree templ.Component) templ.Component {
 // markup at build time; template names a global JavaScript function of the
 // form (item) => html, used to render items that appear at runtime — items the
 // build never saw. Without a template, only reordering and removal work.
-//
-// Each row is wrapped in a keyed <div>, and the list in a container <div>.
-// Rows are static: markers inside row render their static form and are not
-// re-wired. Outside a [Document] the list renders statically.
-func List[T any](s *Signal[[]T], key string, row func(T) templ.Component, template string) templ.Component {
+func List[T any](s *ListSignal[T], key string, row func(T) templ.Component, template string) templ.Component {
+	return s.List(key, row, template)
+}
+
+// List is the method form of [List]: @items.List("id", row, "rowTemplate").
+func (s *ListSignal[T]) List(key string, row func(T) templ.Component, template string) templ.Component {
 	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		sub := context.WithValue(ctx, programKey{}, nil)
 
@@ -91,7 +92,7 @@ func List[T any](s *Signal[[]T], key string, row func(T) templ.Component, templa
 			if _, err := fmt.Fprintf(w, `<div data-x="%s">%s</div>`, id, rows.String()); err != nil {
 				return err
 			}
-			p.list(id, key, template, &s.id)
+			p.list(id, key, template, s.state())
 			return nil
 		}
 

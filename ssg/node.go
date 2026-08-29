@@ -179,6 +179,18 @@ type Node struct {
 	// node's directory. See [CompileScripts]. Locale subtrees do not inherit it.
 	CompileFrom string
 
+	// DependsOn lists source files this node reads when it renders its Page,
+	// Files, CopyFrom, CompileFrom or Generate. On an incremental build — when
+	// [BuildOptions.Changed] is non-empty — the node is rebuilt only if one of
+	// these paths is among the changed files. Paths are resolved relative to the
+	// process working directory, and an entry may name a directory to match
+	// every file beneath it.
+	//
+	// It is optional: leave it empty for a node that reads no data files, and
+	// omit [BuildOptions.Changed] (or pass nil) for a full build. A node that
+	// declares no dependencies is skipped on an incremental build.
+	DependsOn []string
+
 	// Children are static subdirectories, keyed by directory name.
 	Children map[string]Node
 
@@ -200,6 +212,18 @@ type BuildOptions struct {
 	// Dev skips the full clean of OutDir and overwrites files in place,
 	// so a running dev server keeps its inodes and open handles.
 	Dev bool
+
+	// Changed makes a build incremental. When non-empty, only nodes whose
+	// [Node.DependsOn] intersects this list are rebuilt; everything else is left
+	// untouched, and OutDir is not cleaned (as with Dev). Pass nil (or an empty
+	// slice) for a full build.
+	//
+	// A node whose Generate runs in response to a change must list the files or
+	// directory its Generate reads in its own DependsOn, so the change marks it
+	// affected and Generate re-runs to discover any new or changed children.
+	// Incremental builds leave stale output in place when a source is removed;
+	// a full build cleans it.
+	Changed []string
 
 	// BaseURL is the path the site is served from, when that is not a domain
 	// root: "/astwerk" for a GitHub project Pages site at
@@ -228,6 +252,15 @@ type BuildOptions struct {
 	//
 	// Prefer it unless something needs absolute in-page URLs.
 	RelativeURLs bool
+
+	// Pre, if set, runs before the tree is walked, after OutDir has been
+	// cleaned and recreated. Use it for steps the build needs up front — templ
+	// generate, a data fetch — via [Steps]. A failure aborts the build.
+	Pre func() error
+
+	// Post, if set, runs after the tree has been walked. Use it for steps that
+	// run against the finished output. A failure aborts the build.
+	Post func() error
 }
 
 // normalize returns BaseURL in the one form Ctx.Base uses: either empty, or a

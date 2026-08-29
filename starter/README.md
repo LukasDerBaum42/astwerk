@@ -65,7 +65,7 @@ Three rules to keep in mind:
   state declarations before the markup and the bindings after it (see
   `pages/reactive.templ`). Outside a Document the widgets still render — just
   statically, which is what makes reactivity opt-in.
-- **Name anything a script reads.** `x.Named("count", 0)` keeps that name in
+- **Name anything a script reads.** `x.NamedNumSignal("count", 0)` keeps that name in
   the generated JavaScript, so `<script>` bodies and `x.Effect` blocks can read
   the signal directly (`count.get()`). Auto-named signals (s0, s1…) are fine
   for bindings, which never need to know the name.

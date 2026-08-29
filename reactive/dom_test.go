@@ -44,9 +44,9 @@ func tree(parent wasmwrap.Element) string {
 func TestBindText(t *testing.T) {
 	resetDOM(t)
 	e := mount("span")
-	s := NewSignal("one")
+	s := Str("one")
 
-	defer BindText(e, s.Get)()
+	defer BindText(e, s)()
 	if e.Text() != "one" {
 		t.Errorf("text = %q", e.Text())
 	}
@@ -59,19 +59,14 @@ func TestBindText(t *testing.T) {
 func TestBindAttrRemovesOnEmpty(t *testing.T) {
 	resetDOM(t)
 	e := mount("input")
-	disabled := NewSignal(true)
+	disabled := Str("disabled")
 
-	defer BindAttr(e, "disabled", func() string {
-		if disabled.Get() {
-			return "disabled"
-		}
-		return ""
-	})()
+	defer BindAttr(e, "disabled", disabled)()
 
 	if e.Attr("disabled") != "disabled" {
 		t.Errorf("attr = %q", e.Attr("disabled"))
 	}
-	disabled.Set(false)
+	disabled.Set("")
 	if e.Attr("disabled") != "" {
 		t.Errorf("attr = %q, want it removed", e.Attr("disabled"))
 	}
@@ -80,12 +75,12 @@ func TestBindAttrRemovesOnEmpty(t *testing.T) {
 func TestBindClassAndStyleAndShow(t *testing.T) {
 	resetDOM(t)
 	e := mount("div")
-	active := NewSignal(false)
-	color := NewSignal("red")
+	active := Bool(false)
+	color := Str("red")
 
-	defer BindClass(e, "active", active.Get)()
-	defer BindStyle(e, "color", color.Get)()
-	defer BindShow(e, active.Get)()
+	defer BindClass(e, "active", active)()
+	defer BindStyle(e, "color", color)()
+	defer BindShow(e, active)()
 
 	if e.Class().Has("active") {
 		t.Error("class applied while false")
@@ -111,7 +106,7 @@ func TestBindClassAndStyleAndShow(t *testing.T) {
 func TestBindValueTwoWay(t *testing.T) {
 	resetDOM(t)
 	input := mount("input")
-	s := NewSignal("start")
+	s := Str("start")
 
 	defer BindValue(input, s)()
 	if input.InputValue() != "start" {
@@ -140,7 +135,7 @@ func TestBindValueTwoWay(t *testing.T) {
 func TestBindChecked(t *testing.T) {
 	resetDOM(t)
 	box := mount("input")
-	s := NewSignal(false)
+	s := Bool(false)
 
 	defer BindChecked(box, s)()
 	if box.Value().Get("checked").Bool() {
@@ -162,7 +157,7 @@ func TestBindChecked(t *testing.T) {
 func TestBindNumberIgnoresGarbage(t *testing.T) {
 	resetDOM(t)
 	input := mount("input")
-	s := NewSignal(1.5)
+	s := Num(1.5)
 
 	defer BindNumber(input, s)()
 	if got := input.InputValue(); got != "1.5" {
@@ -186,7 +181,7 @@ func TestBindNumberIgnoresGarbage(t *testing.T) {
 func TestOnCleansUpWithEffect(t *testing.T) {
 	resetDOM(t)
 	btn := mount("button")
-	trigger := NewSignal(0)
+	trigger := Num(0)
 	clicks := 0
 
 	dispose := Effect(func() {
@@ -214,10 +209,10 @@ func TestOnCleansUpWithEffect(t *testing.T) {
 func TestBindWhen(t *testing.T) {
 	resetDOM(t)
 	parent := mount("div")
-	show := NewSignal(false)
+	show := Bool(false)
 	builds := 0
 
-	defer BindWhen(parent, show.Get, func() wasmwrap.Element {
+	defer BindWhen(parent, show, func() wasmwrap.Element {
 		builds++
 		return el("p").SetText("here")
 	})()
@@ -250,12 +245,12 @@ type row struct {
 func TestBindListAddRemoveReorder(t *testing.T) {
 	resetDOM(t)
 	parent := mount("ul")
-	items := NewSignal([]row{{"a", "A"}, {"b", "B"}})
+	items := List([]row{{"a", "A"}, {"b", "B"}})
 
 	renders := map[string]int{}
-	defer BindList(parent, items.Get,
+	defer BindList(parent, items,
 		func(r row) string { return r.id },
-		func(r row) wasmwrap.Element {
+		func(r row, _ *Row) wasmwrap.Element {
 			renders[r.id]++
 			return el("li").SetText(r.text)
 		})()
@@ -293,14 +288,14 @@ func TestBindListItemBindingsSurviveReruns(t *testing.T) {
 	resetDOM(t)
 	parent := mount("ul")
 
-	label := NewSignal("first")
-	items := NewSignal([]string{"only"})
+	label := Str("first")
+	items := List([]string{"only"})
 
-	defer BindList(parent, items.Get,
+	defer BindList(parent, items,
 		func(s string) string { return s },
-		func(string) wasmwrap.Element {
+		func(string, *Row) wasmwrap.Element {
 			li := el("li")
-			BindText(li, label.Get)
+			BindText(li, label)
 			return li
 		})()
 
@@ -321,11 +316,11 @@ func TestBindListItemBindingsSurviveReruns(t *testing.T) {
 func TestBindListDisposeClears(t *testing.T) {
 	resetDOM(t)
 	parent := mount("ul")
-	items := NewSignal([]row{{"a", "A"}, {"b", "B"}})
+	items := List([]row{{"a", "A"}, {"b", "B"}})
 
-	dispose := BindList(parent, items.Get,
+	dispose := BindList(parent, items,
 		func(r row) string { return r.id },
-		func(r row) wasmwrap.Element { return el("li").SetText(r.text) })
+		func(r row, _ *Row) wasmwrap.Element { return el("li").SetText(r.text) })
 
 	dispose()
 	if n := len(parent.Children()); n != 0 {
@@ -336,11 +331,11 @@ func TestBindListDisposeClears(t *testing.T) {
 func TestBindListSkipsDuplicateKeys(t *testing.T) {
 	resetDOM(t)
 	parent := mount("ul")
-	items := NewSignal([]row{{"a", "A"}, {"a", "again"}, {"b", "B"}})
+	items := List([]row{{"a", "A"}, {"a", "again"}, {"b", "B"}})
 
-	defer BindList(parent, items.Get,
+	defer BindList(parent, items,
 		func(r row) string { return r.id },
-		func(r row) wasmwrap.Element { return el("li").SetText(r.text) })()
+		func(r row, _ *Row) wasmwrap.Element { return el("li").SetText(r.text) })()
 
 	if got := tree(parent); got != "A,B" {
 		t.Errorf("tree = %q, want A,B", got)
@@ -434,7 +429,7 @@ func TestRouterDisposesViewScope(t *testing.T) {
 	root := mount("div")
 	Replace("/")
 
-	label := NewSignal("a")
+	label := Str("a")
 	binds := 0
 
 	dispose := Router(root, []Route{
@@ -490,7 +485,7 @@ func TestRenderTempl(t *testing.T) {
 func TestBindTempl(t *testing.T) {
 	resetDOM(t)
 	panel := mount("div")
-	n := NewSignal(1)
+	n := Num(1)
 
 	defer BindTempl(panel, func() templ.Component {
 		v := n.Get()
@@ -545,9 +540,9 @@ func TestHydrate(t *testing.T) {
 	btn := el("button").SetAttr("data-inc", "")
 	widget.Append(out, btn)
 
-	count := NewSignal(0)
+	count := Num(0)
 	dispose := Hydrate("#counter", func(root wasmwrap.Element) {
-		BindText(root.Find("[data-count]"), func() string { return strconv.Itoa(count.Get()) })
+		BindText(root.Find("[data-count]"), count)
 		On(root.Find("[data-inc]"), "click", func(wasmwrap.Event) {
 			count.Update(func(v int) int { return v + 1 })
 		})

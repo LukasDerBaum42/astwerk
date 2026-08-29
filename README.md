@@ -1,5 +1,7 @@
 # astwerk
 
+![CI](https://github.com/LukasDerBaum42/astwerk/actions/workflows/ci.yml/badge.svg)
+
 A minimal, no-magic static site generator library for Go + [templ](https://templ.guide).
 No Node.js, no JS build tooling; optional client-side scripting via Go→WASM.
 
@@ -11,8 +13,8 @@ can't get past.
 go get github.com/LukasDerBaum42/astwerk
 ```
 
-**[Documentation](https://lukasderbaum42.github.io/astwerk/)** ·
-[Examples](https://lukasderbaum42.github.io/astwerk/examples/) ·
+**[Documentation](https://lukasderbaum42.github.io/astwerk-website/)** ·
+[Examples](https://lukasderbaum42.github.io/astwerk-website/examples/) ·
 [API reference](https://pkg.go.dev/github.com/LukasDerBaum42/astwerk)
 
 The documentation site is itself built with astwerk — source at
@@ -36,9 +38,10 @@ starter/    17 copyable .templ files — see starter/README.md
 
 `astwerk-spec.md` is the original design sheet. Sections 2, 4, 6a and 9 describe
 API that has since changed — the README, the docs site and the source are
-current; the spec is a historical record. §11 and §12 are the forward-looking
-half: §11.4 (client-side runtime size) and §12 (`astwerk/x`, compiled reactive
-markup) are not started.
+current; the spec is a historical record. §11 is the forward-looking half of
+that original design; §12 (`astwerk/x`, compiled reactive markup) is **shipped**
+— the spec's §12 is the historical proposal, and the current API lives in
+`x/doc.go` and the docs site.
 
 ---
 
@@ -72,7 +75,7 @@ func main() {
 		},
 	}
 
-	if err := ssg.Build(root, ssg.BuildOptions{Dev: dev}); err != nil {
+	if err := ssg.Build(root, ssg.BuildOptions{Dev: dev, RelativeURLs: true}); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -437,12 +440,12 @@ same loop with no extra plumbing.
 
 Interactive UI without WASM and without a JS framework. Markers are ordinary Go
 functions that render at the exact spot they are used, owning the element they
-produce: `@x.Text(count)` writes the value *and* the JavaScript that keeps it
-in sync, in the same call. There is no build pass, no transpiler, and nothing
-to re-render client-side.
+produce: `@count` writes the value *and* the JavaScript that keeps it in sync,
+in the same call. There is no build pass, no transpiler, and nothing to
+re-render client-side.
 
 ```go
-var count = x.NewSignal(0)
+var count = x.NamedNumSignal("count", 0)
 ```
 
 ```templ
@@ -454,8 +457,8 @@ templ Counter(title string, path string, prefix string) {
 
 templ counter() {
 	<div>
-		@x.Text(count)
-		@x.El("button", x.On("click", count.Set(count.Add(1)))) {
+		@count
+		@x.El("button", x.On("click", count.Inc(1))) {
 			+
 		}
 	</div>
@@ -470,10 +473,11 @@ ships roughly the runtime for a counter — not a framework.
 
 The marker set: `Text`, `El` with bindings (`On`, `Attr`, `Class`, `Disabled`,
 `Show`, `Style`), two-way forms (`Input`, `Number`, `Checkbox`), `Computed`,
-`Effect`, `When` and keyed `List`. Handlers are built from a small combinator
-set (`count.Set(count.Add(1))`, `x.Lit`, `x.Not`); anything past that is a
-`<script>` reading `x.Named("count", 0)` signals directly — the escape hatch,
-not a wall. See the `widgets/` starter files for a full example.
+`Effect`, `When` and keyed `List`. Handlers are one-word actions
+(`count.Inc(1)`, `count.SetTo(0)`, `open.Toggle()`) composed with `x.Seq` and
+`x.If`; expressions are package functions (`x.Add`, `x.Mul`, `x.Concat`, …).
+Anything past that is a `<script>` reading the named signals directly — the
+escape hatch, not a wall. See the `widgets/` starter files for a full example.
 
 `x` and the WASM `reactive` package are two implementations of the same
 reactive model. `x` is the lightweight path for the common 90%; WASM stays

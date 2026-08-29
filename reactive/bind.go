@@ -3,6 +3,7 @@
 package reactive
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/LukasDerBaum42/astwerk/wasmwrap"
@@ -13,26 +14,33 @@ import (
 // binding, and writing the effect out by hand at every call site is the
 // boilerplate worth removing.
 //
-// Each returns a dispose function. Called inside an effect, the binding is owned
-// by that effect and torn down with it, so you can usually ignore the return.
+// Each takes the signal object directly — the element knows how to render the
+// value, so the conversion (strconv and friends) dies here rather than at the
+// call site. Each returns a dispose function; called inside an effect the
+// binding is owned by that effect and torn down with it, so you can usually
+// ignore the return.
 
-// BindText keeps el's text in sync with fn.
-func BindText(el wasmwrap.Element, fn func() string) (dispose func()) {
-	return Effect(func() { el.SetText(fn()) })
+// TextValue is what [BindText] renders: a number or a string. The binding
+// formats the value, so strconv dies at the call site.
+type TextValue interface{ int | int64 | float64 | string }
+
+// BindText keeps el's text in sync with s, formatting numbers as text directly.
+func BindText[T TextValue](el wasmwrap.Element, s Readable[T]) (dispose func()) {
+	return Effect(func() { el.SetText(fmt.Sprint(s.Get())) })
 }
 
-// BindHTML keeps el's innerHTML in sync with fn.
+// BindHTML keeps el's innerHTML in sync with s.
 //
-// fn's output is not escaped. Never pass user input through it.
-func BindHTML(el wasmwrap.Element, fn func() string) (dispose func()) {
-	return Effect(func() { el.SetHTML(fn()) })
+// s's value is not escaped. Never pass user input through it.
+func BindHTML(el wasmwrap.Element, s Readable[string]) (dispose func()) {
+	return Effect(func() { el.SetHTML(s.Get()) })
 }
 
-// BindAttr keeps one attribute in sync with fn. An empty string removes the
+// BindAttr keeps one attribute in sync with s. An empty string removes the
 // attribute, which is what boolean attributes like "disabled" need.
-func BindAttr(el wasmwrap.Element, name string, fn func() string) (dispose func()) {
+func BindAttr(el wasmwrap.Element, name string, s Readable[string]) (dispose func()) {
 	return Effect(func() {
-		if v := fn(); v == "" {
+		if v := s.Get(); v == "" {
 			el.RemoveAttr(name)
 		} else {
 			el.SetAttr(name, v)
@@ -40,10 +48,10 @@ func BindAttr(el wasmwrap.Element, name string, fn func() string) (dispose func(
 	})
 }
 
-// BindClass adds or removes one class according to fn.
-func BindClass(el wasmwrap.Element, class string, fn func() bool) (dispose func()) {
+// BindClass adds or removes one class according to s.
+func BindClass(el wasmwrap.Element, class string, s Readable[bool]) (dispose func()) {
 	return Effect(func() {
-		if fn() {
+		if s.Get() {
 			el.Class().Add(class)
 		} else {
 			el.Class().Remove(class)
@@ -51,21 +59,32 @@ func BindClass(el wasmwrap.Element, class string, fn func() bool) (dispose func(
 	})
 }
 
-// BindStyle keeps one CSS property in sync with fn.
-func BindStyle(el wasmwrap.Element, prop string, fn func() string) (dispose func()) {
-	return Effect(func() { el.Style().Set(prop, fn()) })
+// BindStyle keeps one CSS property in sync with s.
+func BindStyle(el wasmwrap.Element, prop string, s Readable[string]) (dispose func()) {
+	return Effect(func() { el.Style().Set(prop, s.Get()) })
 }
 
-// BindShow shows or hides el according to fn.
+// BindShow shows or hides el according to s.
 //
 // Hiding sets display:none; showing clears the inline value rather than setting
 // a specific display, so the stylesheet stays in charge of how it lays out.
-func BindShow(el wasmwrap.Element, fn func() bool) (dispose func()) {
+func BindShow(el wasmwrap.Element, s Readable[bool]) (dispose func()) {
 	return Effect(func() {
-		if fn() {
+		if s.Get() {
 			el.Style().Show()
 		} else {
 			el.Style().Hide()
+		}
+	})
+}
+
+// BindDisabled toggles the boolean disabled attribute according to s.
+func BindDisabled(el wasmwrap.Element, s Readable[bool]) (dispose func()) {
+	return Effect(func() {
+		if s.Get() {
+			el.SetAttr("disabled", "")
+		} else {
+			el.RemoveAttr("disabled")
 		}
 	})
 }
@@ -82,7 +101,7 @@ func On(el wasmwrap.Element, event string, fn func(wasmwrap.Event)) {
 // Typing writes to the signal; setting the signal updates the field. It does not
 // feed back on itself: [Signal.Set] ignores a write equal to the current value,
 // so the effect that echoes the signal back into the field stops there.
-func BindValue(el wasmwrap.Element, s *Signal[string]) (dispose func()) {
+func BindValue(el wasmwrap.Element, s *StrSignal) (dispose func()) {
 	return Effect(func() {
 		el.SetInputValue(s.Get())
 		On(el, "input", func(wasmwrap.Event) { s.Set(el.InputValue()) })
@@ -91,19 +110,19 @@ func BindValue(el wasmwrap.Element, s *Signal[string]) (dispose func()) {
 
 // BindNumber two-way binds a number input to s. Input that isn't a number is
 // ignored rather than clobbering the signal with zero.
-func BindNumber(el wasmwrap.Element, s *Signal[float64]) (dispose func()) {
+func BindNumber[T int | int64 | float64](el wasmwrap.Element, s *NumSignal[T]) (dispose func()) {
 	return Effect(func() {
-		el.SetInputValue(strconv.FormatFloat(s.Get(), 'f', -1, 64))
+		el.SetInputValue(strconv.FormatFloat(float64(s.Get()), 'f', -1, 64))
 		On(el, "input", func(wasmwrap.Event) {
 			if v, err := strconv.ParseFloat(el.InputValue(), 64); err == nil {
-				s.Set(v)
+				s.Set(T(v))
 			}
 		})
 	})
 }
 
 // BindChecked two-way binds a checkbox to s.
-func BindChecked(el wasmwrap.Element, s *Signal[bool]) (dispose func()) {
+func BindChecked(el wasmwrap.Element, s *BoolSignal) (dispose func()) {
 	return Effect(func() {
 		el.Value().Set("checked", s.Get())
 		On(el, "change", func(wasmwrap.Event) { s.Set(el.Value().Get("checked").Bool()) })
@@ -116,9 +135,9 @@ func BindChecked(el wasmwrap.Element, s *Signal[bool]) (dispose func()) {
 // render runs again on every transition into true, so the subtree and any
 // effects inside it are genuinely fresh — that is the difference from
 // [BindShow], which only toggles visibility and keeps state.
-func BindWhen(parent wasmwrap.Element, cond func() bool, render func() wasmwrap.Element) (dispose func()) {
+func BindWhen(parent wasmwrap.Element, cond Readable[bool], render func() wasmwrap.Element) (dispose func()) {
 	return Effect(func() {
-		if !cond() {
+		if !cond.Get() {
 			return
 		}
 		// Untracked so building the subtree doesn't add its reads to this

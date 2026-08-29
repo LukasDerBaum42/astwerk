@@ -15,21 +15,20 @@ import (
 //		return reactive.FetchJSON[[]Post]("/api/posts")
 //	})
 //
-//	reactive.BindShow(spinner, posts.Loading.Get)
-//	reactive.BindText(errBox, func() string {
+//	reactive.BindShow(spinner, posts.Loading)
+//	reactive.BindText(errBox, reactive.Computed(func() string {
 //		if err := posts.Err.Get(); err != nil {
 //			return err.Error()
 //		}
 //		return ""
-//	})
-//	reactive.BindList(list, posts.Data.Get, func(p Post) string { return p.ID }, renderPost)
+//	}))
 type Resource[T any] struct {
 	// Data is the loaded value, or T's zero value before the first success.
 	Data *Signal[T]
 	// Err is the last error, cleared when a load succeeds.
 	Err *Signal[error]
 	// Loading is true while a load is in flight.
-	Loading *Signal[bool]
+	Loading *BoolSignal
 
 	load func() (T, error)
 	gen  int // generation counter, so a stale reload can't overwrite a newer one
@@ -44,7 +43,7 @@ func NewResource[T any](load func() (T, error)) *Resource[T] {
 	r := &Resource[T]{
 		Data:    NewSignal(zero),
 		Err:     NewSignal[error](nil),
-		Loading: NewSignal(false),
+		Loading: Bool(false),
 		load:    load,
 	}
 	r.Reload()

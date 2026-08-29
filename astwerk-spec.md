@@ -1,5 +1,10 @@
 # astwerk — Spec Sheet
 
+> **Historical record.** This is the original design sheet for astwerk, kept
+> for reference. The README, the docs site and the source are current; where
+> they disagree, the code wins. §12 (`astwerk/x`) shipped in a different form —
+> see `x/doc.go` for the current API.
+
 **License: MIT.** Applies to the whole project, including `starter/` —
 templates are meant to be copied and edited freely with no attribution
 burden beyond keeping the license header.

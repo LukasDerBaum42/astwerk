@@ -2,6 +2,7 @@ package reactive
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -398,5 +399,77 @@ func TestScopeDoesNotTrack(t *testing.T) {
 	s.Set(1)
 	if scopeRuns != 1 {
 		t.Errorf("scope re-ran: %d times, want 1", scopeRuns)
+	}
+}
+
+func TestNumSignalIncDec(t *testing.T) {
+	count := Num(10)
+	count.Inc(5)
+	if got := count.Get(); got != 15 {
+		t.Errorf("after Inc, Get = %d, want 15", got)
+	}
+	count.Dec(3)
+	if got := count.Get(); got != 12 {
+		t.Errorf("after Dec, Get = %d, want 12", got)
+	}
+}
+
+func TestBoolSignalToggle(t *testing.T) {
+	open := Bool(false)
+	open.Toggle()
+	if !open.Get() {
+		t.Error("Toggle did not set true")
+	}
+	open.Toggle()
+	if open.Get() {
+		t.Error("second Toggle did not set false")
+	}
+}
+
+func TestSignalType(t *testing.T) {
+	cases := []struct {
+		name string
+		got  reflect.Type
+		want reflect.Type
+	}{
+		{"int", Num(0).Type(), reflect.TypeOf(0)},
+		{"int64", Num(int64(0)).Type(), reflect.TypeOf(int64(0))},
+		{"float64", Num(0.0).Type(), reflect.TypeOf(float64(0))},
+		{"bool", Bool(false).Type(), reflect.TypeOf(false)},
+		{"string", Str("").Type(), reflect.TypeOf("")},
+		{"list", List([]int{}).Type(), reflect.TypeOf([]int{})},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s: Type() = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestListSignalSetAndGet(t *testing.T) {
+	items := List([]int{1, 2})
+	if got := items.Get(); !reflect.DeepEqual(got, []int{1, 2}) {
+		t.Errorf("Get = %v", got)
+	}
+	items.Update(func(v []int) []int { return append(v, 3) })
+	if got := items.Get(); !reflect.DeepEqual(got, []int{1, 2, 3}) {
+		t.Errorf("after Update, Get = %v", got)
+	}
+}
+
+func TestSplitSignalsParticipateInEffects(t *testing.T) {
+	count := Num(0)
+	open := Bool(true)
+	var seen []string
+	defer Effect(func() {
+		seen = append(seen, fmt.Sprintf("%d/%v", count.Get(), open.Get()))
+	})()
+
+	count.Inc(1)
+	open.Toggle()
+
+	want := "[0/true 1/true 1/false]"
+	if fmt.Sprint(seen) != want {
+		t.Errorf("seen = %v, want %s", seen, want)
 	}
 }

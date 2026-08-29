@@ -46,6 +46,16 @@ func (ev Event) PosIn(el Element) (x, y int) {
 	return cx - r.Get("left").Int(), cy - r.Get("top").Int()
 }
 
+// InputValue returns the target's value for input/change events — the field's
+// current text, read from the event rather than a captured element.
+func (ev Event) InputValue() string {
+	t := ev.v.Get("target")
+	if t.IsNull() || t.IsUndefined() {
+		return ""
+	}
+	return t.Get("value").String()
+}
+
 // On binds fn to the named event and returns a function that unbinds it.
 //
 // Calling the returned function also releases the underlying js.Func. Handlers
@@ -81,4 +91,49 @@ func (e Element) Once(event string, fn func(Event)) (unsubscribe func()) {
 		fn(ev)
 	})
 	return off
+}
+
+// OnOptions tailors an event listener with the flags addEventListener accepts.
+type OnOptions struct {
+	Capture bool // fire during the capture phase, not the bubble phase
+	Once    bool // unbind after the first call
+	Passive bool // never call preventDefault — lets the browser scroll freely
+}
+
+// OnOpts binds fn to the named event with the given options and returns a
+// function that unbinds it. See [Element.On] for the js.Func lifecycle.
+func (e Element) OnOpts(event string, opts OnOptions, fn func(Event)) (unsubscribe func()) {
+	cb := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		var ev Event
+		if len(args) > 0 {
+			ev = Event{v: args[0]}
+		}
+		fn(ev)
+		return nil
+	})
+	add := js.Global().Get("Object").New()
+	if opts.Capture {
+		add.Set("capture", true)
+	}
+	if opts.Once {
+		add.Set("once", true)
+	}
+	if opts.Passive {
+		add.Set("passive", true)
+	}
+	e.v.Call("addEventListener", event, cb, add)
+
+	done := false
+	return func() {
+		if done {
+			return
+		}
+		done = true
+		rem := js.Global().Get("Object").New()
+		if opts.Capture {
+			rem.Set("capture", true)
+		}
+		e.v.Call("removeEventListener", event, cb, rem)
+		cb.Release()
+	}
 }

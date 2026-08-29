@@ -23,6 +23,7 @@ type program struct {
 	order []*state
 	stmts []func(*program, *strings.Builder)
 	feat  map[string]bool
+	named map[*state]bool
 }
 
 func newProgram() *program {
@@ -30,6 +31,7 @@ func newProgram() *program {
 		names: map[*state]string{},
 		taken: map[string]bool{},
 		feat:  map[string]bool{},
+		named: map[*state]bool{},
 	}
 }
 
@@ -75,6 +77,11 @@ func (p *program) name(s *state) string {
 				break
 			}
 		}
+	} else {
+		// The explicit name survived: it is stable API, so record it in the
+		// bridge's registry. Assigned names are not — they are build internals.
+		p.named[s] = true
+		p.use("register")
 	}
 	p.taken[n] = true
 	p.names[s] = n
@@ -226,6 +233,11 @@ func (p *program) header() string {
 			exports = append(exports, f.export)
 		}
 	}
+	if p.feat["register"] {
+		// register is generated-code-only, so it is exported next to state but
+		// is not part of the public aw surface a script should call.
+		exports = append(exports, "register")
+	}
 	rt.WriteString("\tglobalThis.aw = { " + strings.Join(exports, ", ") + " };\n})();")
 	code := rt.String()
 	if p.min {
@@ -253,6 +265,9 @@ func (p *program) header() string {
 			b.WriteString(");\n")
 		} else {
 			b.WriteString("aw.signal(" + jsLiteral(s.init) + ");\n")
+		}
+		if p.named[s] {
+			b.WriteString("aw.register(" + jsLiteral(s.name) + ", " + p.name(s) + ");\n")
 		}
 	}
 	b.WriteString("</script>\n")

@@ -2,6 +2,8 @@
 //
 // Front matter is kept as a generic map rather than a fixed struct, so each
 // project decodes it into whatever struct its own layouts need via [Decode].
+// [LoadCollection] and [LoadCollectionTree] decode a whole directory into a
+// typed [Collection] in one call.
 package content
 
 import (

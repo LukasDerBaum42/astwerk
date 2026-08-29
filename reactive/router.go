@@ -32,14 +32,14 @@ type Route struct {
 
 var (
 	pathOnce   sync.Once
-	pathSignal *Signal[string]
+	pathSignal *StrSignal
 )
 
 // history is the single source of truth for the current URL, so the signal
 // behind it is package-level by necessity — there is only one address bar.
-func pathState() *Signal[string] {
+func pathState() *StrSignal {
 	pathOnce.Do(func() {
-		pathSignal = NewSignal(location())
+		pathSignal = Str(location())
 		// The browser's back and forward buttons change the URL without going
 		// through Navigate, so the signal has to follow popstate too.
 		wasmwrap.Wrap(js.Global()).On("popstate", func(wasmwrap.Event) {

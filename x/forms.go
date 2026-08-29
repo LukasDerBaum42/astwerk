@@ -10,7 +10,7 @@ import (
 
 // Input renders a text input two-way bound to s: typing writes the signal,
 // setting the signal updates the field.
-func Input(s Value[string]) templ.Component {
+func (s *StrSignal) Input() templ.Component {
 	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		value := templ.EscapeString(s.Get())
 		if p := programFrom(ctx); p != nil {
@@ -26,9 +26,12 @@ func Input(s Value[string]) templ.Component {
 	})
 }
 
+// Input is the package-function form of [StrSignal.Input].
+func Input(s *StrSignal) templ.Component { return s.Input() }
+
 // Number renders a number input two-way bound to s. Input that is not a number
 // is ignored rather than clobbering the signal with zero.
-func Number(s Value[float64]) templ.Component {
+func (s *NumSignal[T]) Number() templ.Component {
 	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		value := templ.EscapeString(fmt.Sprint(s.Get()))
 		if p := programFrom(ctx); p != nil {
@@ -44,8 +47,11 @@ func Number(s Value[float64]) templ.Component {
 	})
 }
 
+// Number is the package-function form of [NumSignal.Number].
+func Number[T int | int64 | float64](s *NumSignal[T]) templ.Component { return s.Number() }
+
 // Checkbox renders a checkbox two-way bound to s.
-func Checkbox(s Value[bool]) templ.Component {
+func (s *BoolSignal) Checkbox() templ.Component {
 	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		checked := ""
 		if s.Get() {
@@ -63,3 +69,6 @@ func Checkbox(s Value[bool]) templ.Component {
 		return err
 	})
 }
+
+// Checkbox is the package-function form of [BoolSignal.Checkbox].
+func Checkbox(s *BoolSignal) templ.Component { return s.Checkbox() }

@@ -13,17 +13,17 @@ type Todo struct {
 
 // Todos is the list itself; Draft is the new-item input. Both are named so the
 // scripts in todoScripts can read them.
-var Todos = x.Named("todos", []Todo{})
-var Draft = x.Named("draft", "")
+var Todos = x.NamedListSignal("todos", []Todo{})
+var Draft = x.NamedStrSignal("draft", "")
 
 // TodoList renders the input, the add button and the keyed list. Items present
 // at build time render through todoRow; items added in the browser render
 // through the todoRow script in todoScripts.
 templ TodoList() {
 	<div class="todo">
-		@x.Input(Draft)
+		@Draft.Input()
 		<button id="add-todo">Add</button>
-		@x.List(Todos, "id", todoRow, "todoRow")
+		@Todos.List("id", todoRow, "todoRow")
 	</div>
 	@todoScripts()
 }

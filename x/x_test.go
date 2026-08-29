@@ -3,7 +3,9 @@ package x
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -18,14 +20,34 @@ func render(c templ.Component) string {
 	return buf.String()
 }
 
+func renderErr(c templ.Component) (string, error) {
+	var buf bytes.Buffer
+	err := c.Render(context.Background(), &buf)
+	return buf.String(), err
+}
+
+func mustPanic(t *testing.T, msg string, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("expected a panic containing %q, got none", msg)
+		}
+		if !strings.Contains(fmt.Sprint(r), msg) {
+			t.Fatalf("panic = %q, want it to contain %q", r, msg)
+		}
+	}()
+	fn()
+}
+
 func TestCounter(t *testing.T) {
-	count := NewSignal(0)
+	count := NewNumSignal(0)
 
 	page := Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		if err := Text(count).Render(ctx, w); err != nil {
 			return err
 		}
-		btn := El("button", On("click", count.Set(count.Add(1))))
+		btn := El("button", On("click", count.Inc(1)))
 		return btn.Render(templ.WithChildren(ctx, templ.Raw("+")), w)
 	}))
 
@@ -42,7 +64,6 @@ func TestCounter(t *testing.T) {
 		}
 	}
 
-	// Declarations load before the body; bindings after it.
 	if i, j := strings.Index(out, "const s0 = aw.signal(0);"), strings.Index(out, `<span data-x="0">`); i < 0 || j < 0 || i >= j {
 		t.Errorf("declaration should precede the body:\n%s", out)
 	}
@@ -52,7 +73,7 @@ func TestCounter(t *testing.T) {
 }
 
 func TestStaticWithoutDocument(t *testing.T) {
-	count := NewSignal(7)
+	count := NewNumSignal(7)
 	if got, want := render(Text(count)), `<span>7</span>`; got != want {
 		t.Errorf("Text outside Document = %q, want %q", got, want)
 	}
@@ -91,8 +112,8 @@ func TestJS(t *testing.T) {
 }
 
 func TestNestedDocument(t *testing.T) {
-	a := NewSignal(1)
-	b := NewSignal(2)
+	a := NewNumSignal(1)
+	b := NewNumSignal(2)
 
 	page := Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		if err := Text(a).Render(ctx, w); err != nil {
@@ -118,11 +139,11 @@ func TestNestedDocument(t *testing.T) {
 }
 
 func TestBindings(t *testing.T) {
-	url := NewSignal("/home")
-	active := NewSignal(true)
-	shown := NewSignal(false)
-	name := NewSignal("Lukas")
-	done := NewSignal(true)
+	url := NewStrSignal("/home")
+	active := NewBoolSignal(true)
+	shown := NewBoolSignal(false)
+	name := NewStrSignal("Lukas")
+	done := NewBoolSignal(true)
 
 	page := Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		if err := El("a", Attr("href", url)).Render(templ.WithChildren(ctx, templ.Raw("home")), w); err != nil {
@@ -156,14 +177,14 @@ func TestBindings(t *testing.T) {
 }
 
 func TestStyleAndOn(t *testing.T) {
-	color := NewSignal("red")
-	count := NewSignal(0)
+	color := NewStrSignal("red")
+	count := NewNumSignal(0)
 
 	page := Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		if err := El("p", Style("color", color)).Render(templ.WithChildren(ctx, templ.Raw("hi")), w); err != nil {
 			return err
 		}
-		return El("a", On("click", count.Set(count.Add(1)))).Render(templ.WithChildren(ctx, templ.Raw("inc")), w)
+		return El("a", On("click", count.Inc(1))).Render(templ.WithChildren(ctx, templ.Raw("inc")), w)
 	}))
 
 	out := render(page)
@@ -180,9 +201,9 @@ func TestStyleAndOn(t *testing.T) {
 }
 
 func TestComputed(t *testing.T) {
-	price := NewSignal(10)
-	qty := NewSignal(2)
-	total := Computed(price.Mul(qty))
+	price := NewNumSignal(10)
+	qty := NewNumSignal(2)
+	total := Computed(Mul(price, qty))
 
 	if got := total.Get(); got != 20 {
 		t.Errorf("total.Get() = %d, want 20", got)
@@ -204,7 +225,7 @@ func TestComputed(t *testing.T) {
 }
 
 func TestNamedScriptAccess(t *testing.T) {
-	count := Named("count", 5)
+	count := NamedNumSignal("count", 5)
 
 	page := Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		if err := Text(count).Render(ctx, w); err != nil {
@@ -226,19 +247,57 @@ func TestNamedScriptAccess(t *testing.T) {
 }
 
 func TestInvalidNameFallsBack(t *testing.T) {
-	count := Named("for", 3)
+	count := NamedNumSignal("for", 3)
 	out := render(Document(Text(count)))
 	if !strings.Contains(out, "const s0 = aw.signal(3);") {
 		t.Errorf("reserved name should fall back to an assigned name:\n%s", out)
 	}
+	// A name that fell back is not registered: it is not stable API.
+	if strings.Contains(out, "aw.register") {
+		t.Errorf("assigned name was registered:\n%s", out)
+	}
+}
+
+func TestRegistry(t *testing.T) {
+	count := NamedNumSignal("count", 0)
+	anon := NewNumSignal(1)
+
+	page := Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
+		if err := Text(count).Render(ctx, w); err != nil {
+			return err
+		}
+		return Text(anon).Render(ctx, w)
+	}))
+
+	out := render(page)
+	for _, want := range []string{
+		`aw.register("count", count);`,
+		"globalThis.aw = { signal, text, state, register };",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `aw.register("s1"`) {
+		t.Errorf("assigned name was registered:\n%s", out)
+	}
+}
+
+func TestNoRegistryWithoutNamedSignals(t *testing.T) {
+	out := render(Document(Text(NewNumSignal(0))))
+	if strings.Contains(out, "aw.register") || strings.Contains(out, "aw.state") {
+		t.Errorf("unnamed page shipped the registry:\n%s", out)
+	}
+	if !strings.Contains(out, `globalThis.aw = { signal, text };`) {
+		t.Errorf("expected text-only export list:\n%s", out)
+	}
 }
 
 func TestEffect(t *testing.T) {
-	count := Named("count", 0)
+	count := NamedNumSignal("count", 0)
 	script := templ.Raw("<script>\n\t\t\tdocument.title = \"Count: \" + count.get();\n\t\t</script>")
 	want := `aw.effect(() => { document.title = "Count: " + count.get(); });`
 
-	// argument form
 	page := Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		if err := Text(count).Render(ctx, w); err != nil {
 			return err
@@ -249,7 +308,6 @@ func TestEffect(t *testing.T) {
 		t.Errorf("argument form missing %q:\n%s", want, out)
 	}
 
-	// children form
 	page = Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		if err := Text(count).Render(ctx, w); err != nil {
 			return err
@@ -262,7 +320,7 @@ func TestEffect(t *testing.T) {
 }
 
 func TestMinimalRuntime(t *testing.T) {
-	count := NewSignal(0)
+	count := NewNumSignal(0)
 	out := render(Document(Text(count)))
 	for _, absent := range []string{"aw.effect", "aw.computed", "aw.when", "aw.list", "aw.value", "aw.checked", "aw.attr"} {
 		if strings.Contains(out, absent) {
@@ -275,7 +333,7 @@ func TestMinimalRuntime(t *testing.T) {
 }
 
 func TestWhen(t *testing.T) {
-	shown := NewSignal(true)
+	shown := NewBoolSignal(true)
 	out := render(Document(When(shown, templ.Raw(`<p>secret</p>`))))
 	for _, want := range []string{
 		`<div data-x="0"><p>secret</p></div>`,
@@ -286,7 +344,7 @@ func TestWhen(t *testing.T) {
 		}
 	}
 
-	hidden := NewSignal(false)
+	hidden := NewBoolSignal(false)
 	out = render(Document(When(hidden, templ.Raw(`<p>secret</p>`))))
 	if !strings.Contains(out, `<div data-x="0"></div>`) {
 		t.Errorf("false condition should render an empty container:\n%s", out)
@@ -294,7 +352,7 @@ func TestWhen(t *testing.T) {
 }
 
 func TestWhenStatic(t *testing.T) {
-	shown := NewSignal(true)
+	shown := NewBoolSignal(true)
 	if got, want := render(When(shown, templ.Raw(`<p>x</p>`))), `<p>x</p>`; got != want {
 		t.Errorf("When outside Document = %q, want %q", got, want)
 	}
@@ -305,7 +363,7 @@ func TestList(t *testing.T) {
 		ID   string `json:"id"`
 		Text string `json:"text"`
 	}
-	todos := NewSignal([]Todo{
+	todos := NewListSignal([]Todo{
 		{ID: "1", Text: "buy milk"},
 		{ID: "2", Text: "write code"},
 	})
@@ -324,25 +382,24 @@ func TestList(t *testing.T) {
 	}
 }
 
-func TestListStatic(t *testing.T) {
+func TestListMethodForm(t *testing.T) {
 	type Todo struct {
 		ID   string `json:"id"`
 		Text string `json:"text"`
 	}
-	todos := NewSignal([]Todo{{ID: "1", Text: "hi"}})
-	row := func(t Todo) templ.Component {
-		return templ.Raw(`<li>` + templ.EscapeString(t.Text) + `</li>`)
-	}
-	got := render(List(todos, "id", row, ""))
+	todos := NewListSignal([]Todo{{ID: "1", Text: "hi"}})
+	row := func(t Todo) templ.Component { return templ.Raw(`<li>` + templ.EscapeString(t.Text) + `</li>`) }
+
+	got := render(todos.List("id", row, ""))
 	if want := `<div data-key="1"><li>hi</li></div>`; got != want {
-		t.Errorf("List outside Document = %q, want %q", got, want)
+		t.Errorf("List method outside Document = %q, want %q", got, want)
 	}
 }
 
 func TestDeadStateElimination(t *testing.T) {
-	used := NewSignal(1)
-	unused := NewSignal(2)
-	Computed(unused.Mul(2))
+	used := NewNumSignal(1)
+	unused := NewNumSignal(2)
+	Computed(Mul(unused, 2))
 
 	out := render(Document(Text(used)))
 	if !strings.Contains(out, "const s0 = aw.signal(1);") {
@@ -354,14 +411,14 @@ func TestDeadStateElimination(t *testing.T) {
 }
 
 func TestLitAndNot(t *testing.T) {
-	count := NewSignal(5)
-	open := NewSignal(false)
+	count := NewNumSignal(5)
+	open := NewBoolSignal(false)
 
 	page := Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
-		if err := El("button", On("click", count.Set(Lit(0)))).Render(templ.WithChildren(ctx, templ.Raw("reset")), w); err != nil {
+		if err := El("button", On("click", count.SetTo(0))).Render(templ.WithChildren(ctx, templ.Raw("reset")), w); err != nil {
 			return err
 		}
-		return El("button", On("click", open.Set(Not(open)))).Render(templ.WithChildren(ctx, templ.Raw("toggle")), w)
+		return El("button", On("click", open.Toggle())).Render(templ.WithChildren(ctx, templ.Raw("toggle")), w)
 	}))
 
 	out := render(page)
@@ -375,11 +432,6 @@ func TestLitAndNot(t *testing.T) {
 	}
 }
 
-// The runtime's set() must iterate a snapshot of its subscribers and pass the
-// new value: an effect re-subscribes when it re-runs, and iterating the live
-// set would pick the re-added subscription up and call it again — an infinite
-// loop that freezes the page (found the hard way on the docs site). Pin the
-// shape so it cannot regress.
 func TestRuntimeSetIteratesASnapshot(t *testing.T) {
 	if !strings.Contains(runtimeCore, "[...subs].forEach((f) => f(v))") {
 		t.Errorf("runtime set() must iterate a snapshot of subscribers and pass the value, got:\n%s", runtimeCore)
@@ -387,7 +439,7 @@ func TestRuntimeSetIteratesASnapshot(t *testing.T) {
 }
 
 func TestMinified(t *testing.T) {
-	count := NewSignal(0)
+	count := NewNumSignal(0)
 	page := Document(Text(count), Minified())
 	out := render(page)
 
@@ -409,17 +461,17 @@ func TestMinified(t *testing.T) {
 }
 
 func TestFullPage(t *testing.T) {
-	count := Named("count", 0)
-	name := NewSignal("Lukas")
-	price := NewSignal(10)
-	qty := NewSignal(2)
-	total := Computed(price.Mul(qty))
-	shown := NewSignal(true)
+	count := NamedNumSignal("count", 0)
+	name := NewStrSignal("Lukas")
+	price := NewNumSignal(10)
+	qty := NewNumSignal(2)
+	total := Computed(Mul(price, qty))
+	shown := NewBoolSignal(true)
 	type Todo struct {
 		ID   string `json:"id"`
 		Text string `json:"text"`
 	}
-	todos := NewSignal([]Todo{{ID: "1", Text: "buy milk"}})
+	todos := NewListSignal([]Todo{{ID: "1", Text: "buy milk"}})
 	row := func(t Todo) templ.Component {
 		return templ.Raw(`<li>` + templ.EscapeString(t.Text) + `</li>`)
 	}
@@ -428,7 +480,7 @@ func TestFullPage(t *testing.T) {
 		if err := Text(count).Render(ctx, w); err != nil {
 			return err
 		}
-		if err := El("button", On("click", count.Set(count.Add(1)))).Render(templ.WithChildren(ctx, templ.Raw("+")), w); err != nil {
+		if err := El("button", On("click", count.Inc(1))).Render(templ.WithChildren(ctx, templ.Raw("+")), w); err != nil {
 			return err
 		}
 		if err := Input(name).Render(ctx, w); err != nil {
@@ -460,8 +512,9 @@ func TestFullPage(t *testing.T) {
 		"const s2 = aw.signal(2);",
 		"const s3 = aw.computed([s1, s2], () => s1.get() * s2.get());",
 		"const s4 = aw.signal(true);",
-		`const s5 = aw.signal([{"id":"1","text":"buy milk"}]);`,
-		"globalThis.aw = { signal, effect, computed, text, on, value, when, list };",
+		"const s5 = aw.signal([{\"id\":\"1\",\"text\":\"buy milk\"}]);",
+		"globalThis.aw = { signal, effect, computed, text, on, value, when, list, state, register };",
+		"aw.register(\"count\", count);",
 		`aw.text("0", count);`,
 		`aw.on("1", "click", () => { count.set(count.get() + 1); });`,
 		`aw.value("2", s0);`,
@@ -473,5 +526,213 @@ func TestFullPage(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestType(t *testing.T) {
+	type Todo struct{ ID string }
+	cases := []struct {
+		name string
+		s    State
+		want reflect.Type
+	}{
+		{"int", NewNumSignal(0), reflect.TypeOf(0)},
+		{"int64", NewNumSignal(int64(0)), reflect.TypeOf(int64(0))},
+		{"float64", NewNumSignal(0.0), reflect.TypeOf(float64(0))},
+		{"bool", NewBoolSignal(false), reflect.TypeOf(false)},
+		{"string", NewStrSignal(""), reflect.TypeOf("")},
+		{"list", NewListSignal([]Todo{}), reflect.TypeOf([]Todo{})},
+		{"memo", Computed(Add(NewNumSignal(1), NewNumSignal(2))), reflect.TypeOf(0)},
+	}
+	for _, c := range cases {
+		if got := c.s.Type(); got != c.want {
+			t.Errorf("%s: Type() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestOperandTypeCheck(t *testing.T) {
+	count := NewNumSignal(0)
+
+	if e := Add(count, 1); e.v != 1 {
+		t.Errorf("literal operand: build-time value = %v, want 1", e.v)
+	}
+	other := NewNumSignal(2)
+	if e := Add(count, other); e.v != 2 {
+		t.Errorf("value operand: build-time value = %v, want 2", e.v)
+	}
+	if e := Add(count, Mul(count, 2)); e.v != 0 {
+		t.Errorf("expression operand: build-time value = %v, want 0", e.v)
+	}
+
+	mustPanic(t, "does not match value type", func() { Add(count, NewStrSignal("x")) })
+	mustPanic(t, "does not match value type", func() { Add(count, "x") })
+}
+
+func TestSeqAndIf(t *testing.T) {
+	count := NewNumSignal(0)
+	open := NewBoolSignal(false)
+	dark := NewBoolSignal(false)
+	accent := NewStrSignal("light")
+
+	page := Document(templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
+		if err := El("button", On("click", Seq(count.Dec(1), open.SetTo(false)))).Render(templ.WithChildren(ctx, templ.Raw("x")), w); err != nil {
+			return err
+		}
+		if err := El("button", On("click", If(dark, accent.SetTo("light")))).Render(templ.WithChildren(ctx, templ.Raw("y")), w); err != nil {
+			return err
+		}
+		return El("button", On("click", If(open, count.Inc(1), count.Dec(1)))).Render(templ.WithChildren(ctx, templ.Raw("z")), w)
+	}))
+
+	out := render(page)
+	for _, want := range []string{
+		`aw.on("0", "click", () => { s0.set(s0.get() - 1); s1.set(false); });`,
+		`if (s2.get()) { s3.set("light") }`,
+		`if (s1.get()) { s0.set(s0.get() + 1) } else { s0.set(s0.get() - 1) }`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestConcat(t *testing.T) {
+	name := NewStrSignal("astwerk")
+	out := render(Document(Text(Computed(Concat(name, " Ltd.")))))
+	for _, want := range []string{
+		`<span data-x="0">astwerk Ltd.</span>`,
+		`const s1 = aw.computed([s0], () => s0.get() + " Ltd.");`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestComparisons(t *testing.T) {
+	n := NewNumSignal(75)
+	cases := []struct {
+		e    Expr[bool]
+		want bool
+	}{
+		{Gt(n, 50), true},
+		{Lt(n, 100), true},
+		{Gte(n, 75), true},
+		{Lte(n, 74), false},
+		{Eq(n, 75), true},
+		{Ne(n, 75), false},
+	}
+	for _, c := range cases {
+		if c.e.v != c.want {
+			t.Errorf("comparison build-time value = %v, want %v", c.e.v, c.want)
+		}
+	}
+}
+
+func TestComparisonRender(t *testing.T) {
+	n := NewNumSignal(75)
+	ops := []struct {
+		e   Expr[bool]
+		op  string
+		val string
+	}{
+		{Gt(n, 50), ">", "true"},
+		{Lt(n, 100), "<", "true"},
+		{Gte(n, 75), ">=", "true"},
+		{Lte(n, 74), "<=", "false"},
+		{Eq(n, 75), "===", "true"},
+		{Ne(n, 75), "!==", "false"},
+	}
+	for _, c := range ops {
+		out := render(Document(Text(Computed(c.e))))
+		for _, want := range []string{
+			`<span data-x="0">` + c.val + `</span>`,
+			"() => s0.get() " + c.op + " ",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("operator %q missing %q:\n%s", c.op, want, out)
+			}
+		}
+	}
+}
+
+func TestBareValueRendersText(t *testing.T) {
+	count := NewNumSignal(7)
+	if bare, explicit := render(count), render(count.Text()); bare != explicit {
+		t.Errorf("bare value = %q, Text() = %q; want identical", bare, explicit)
+	}
+	if got, want := render(count), `<span>7</span>`; got != want {
+		t.Errorf("bare value outside Document = %q, want %q", got, want)
+	}
+}
+
+func TestIncWithSignalAmount(t *testing.T) {
+	count := NewNumSignal(0)
+	step := NamedNumSignal("step", 2)
+	out := render(Document(El("button", On("click", count.Inc(step)))))
+	for _, want := range []string{
+		`aw.on("0", "click", () => { s0.set(s0.get() + step.get()); });`,
+		"const s0 = aw.signal(0);",
+		"const step = aw.signal(2);",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestWrap(t *testing.T) {
+	count := NewNumSignal(0)
+	btn := templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
+		_, err := io.WriteString(w, `<button class="btn btn-primary">+</button>`)
+		return err
+	})
+
+	page := Document(Wrap(btn, HtmlAttr("aria-label", "increment"), On("click", count.Inc(1))))
+	out := render(page)
+	for _, want := range []string{
+		`<button data-x="0" aria-label="increment" class="btn btn-primary">+</button>`,
+		`aw.on("0", "click", () => { s0.set(s0.get() + 1); });`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestWrapStatic(t *testing.T) {
+	btn := templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
+		_, err := io.WriteString(w, `<button>+</button>`)
+		return err
+	})
+	out := render(Wrap(btn, On("click", NewNumSignal(0).Inc(1))))
+	if got, want := out, `<button>+</button>`; got != want {
+		t.Errorf("Wrap outside Document = %q, want %q", got, want)
+	}
+}
+
+func TestWrapPreservesLeadingText(t *testing.T) {
+	count := NewNumSignal(0)
+	btn := templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
+		_, err := io.WriteString(w, "\n  <button>+</button>")
+		return err
+	})
+	out := render(Document(Wrap(btn, On("click", count.Inc(1)))))
+	if !strings.Contains(out, "\n  <button data-x=\"0\">+</button>") {
+		t.Errorf("leading text dropped:\n%q", out)
+	}
+}
+
+func TestWrapTextOnly(t *testing.T) {
+	if _, err := renderErr(Document(Wrap(templ.Raw("hello"), On("click", NewNumSignal(0).Inc(1))))); err == nil || !strings.Contains(err.Error(), "no element") {
+		t.Errorf("expected a no-element error, got %v", err)
+	}
+}
+
+func TestWrapMultiRoot(t *testing.T) {
+	c := templ.Raw(`<div>a</div><div>b</div>`)
+	if _, err := renderErr(Document(Wrap(c, On("click", NewNumSignal(0).Inc(1))))); err == nil || !strings.Contains(err.Error(), "multiple root") {
+		t.Errorf("expected a multiple-root error, got %v", err)
 	}
 }

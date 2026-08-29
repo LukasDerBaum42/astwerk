@@ -544,3 +544,84 @@ func TestWrapAndValueRoundTrip(t *testing.T) {
 		t.Error("Wrap(Value()) did not round-trip")
 	}
 }
+
+func TestWidgetHelpers(t *testing.T) {
+	resetDOM(t)
+
+	if got := Button("+"); got.Attr("type") != "button" || got.Text() != "+" {
+		t.Errorf("Button = type:%q text:%q", got.Attr("type"), got.Text())
+	}
+	if got := Input(); got.Attr("type") != "text" {
+		t.Errorf("Input type = %q", got.Attr("type"))
+	}
+	if got := NumberInput(); got.Attr("type") != "number" {
+		t.Errorf("NumberInput type = %q", got.Attr("type"))
+	}
+	if got := Checkbox(); got.Attr("type") != "checkbox" {
+		t.Errorf("Checkbox type = %q", got.Attr("type"))
+	}
+	if got := Label("name"); got.Text() != "name" {
+		t.Errorf("Label text = %q", got.Text())
+	}
+	if got := Link("/a", "go"); got.Attr("href") != "/a" || got.Text() != "go" {
+		t.Errorf("Link = href:%q text:%q", got.Attr("href"), got.Text())
+	}
+	if got := Span("s"); got.Text() != "s" {
+		t.Errorf("Span text = %q", got.Text())
+	}
+	if got := Panel(); got.Value().Get("tagName").String() != "DIV" {
+		t.Errorf("Panel tag = %q", got.Value().Get("tagName").String())
+	}
+}
+
+func TestDataset(t *testing.T) {
+	resetDOM(t)
+	el := mount("div")
+
+	el.Dataset().Set("accent", "blue")
+	if got := el.Attr("data-accent"); got != "blue" {
+		t.Errorf("data-accent = %q", got)
+	}
+	if got := el.Dataset().Get("accent"); got != "blue" {
+		t.Errorf("Dataset.Get = %q", got)
+	}
+	el.Dataset().Remove("accent")
+	if got := el.Attr("data-accent"); got != "" {
+		t.Errorf("data-accent after remove = %q", got)
+	}
+}
+
+func TestExportAndUnexport(t *testing.T) {
+	calls := 0
+	unexport := Export("astwerkTestFn", func(_ js.Value, args []js.Value) any {
+		calls++
+		if len(args) > 0 {
+			return args[0].String() + "!"
+		}
+		return "no args"
+	})
+
+	got := js.Global().Call("astwerkTestFn", "hi")
+	if got.String() != "hi!" || calls != 1 {
+		t.Errorf("exported fn = %q calls=%d", got.String(), calls)
+	}
+
+	unexport()
+	unexport() // idempotent
+	if js.Global().Get("astwerkTestFn").Truthy() {
+		t.Error("unexport did not remove the global")
+	}
+}
+
+func TestEventInputValue(t *testing.T) {
+	resetDOM(t)
+	input := mount("input").SetInputValue("typed")
+
+	var got Event
+	input.On("input", func(e Event) { got = e })
+	input.Value().Call("dispatch", "input", js.Null())
+
+	if got.InputValue() != "typed" {
+		t.Errorf("InputValue = %q", got.InputValue())
+	}
+}

@@ -1,5 +1,7 @@
 package reactive
 
+import "reflect"
+
 // This file is deliberately free of build constraints: the reactive core is
 // pure Go, so it is testable on the host. Everything that touches the DOM lives
 // in the js/wasm-only files alongside it.
@@ -81,6 +83,70 @@ func (s *Signal[T]) Subscribe(fn func(T)) (unsubscribe func()) {
 	// change, not immediately.
 	link(e, &s.src)
 	return func() { disposeEffect(e) }
+}
+
+// --- Split state types ---
+//
+// The public surface is split into one type per value kind, so a BoolSignal has
+// no Inc() and a NumSignal has no Toggle() — what compiles is what is
+// meaningful. Each wraps the generic [Signal], adding only the methods its kind
+// makes sense for. The generic [Signal] stays exported for the cases with no
+// useful kind — a [Resource]'s Data or Err field, say — where T is genuinely
+// arbitrary.
+
+// NumSignal holds a number: int, int64 or float64.
+type NumSignal[T int | int64 | float64] struct{ Signal[T] }
+
+// Num returns a number signal holding v.
+func Num[T int | int64 | float64](v T) *NumSignal[T] {
+	return &NumSignal[T]{Signal[T]{v: v}}
+}
+
+// Inc adds n to the signal's value.
+func (s *NumSignal[T]) Inc(n T) { s.Set(s.Get() + n) }
+
+// Dec subtracts n from the signal's value.
+func (s *NumSignal[T]) Dec(n T) { s.Set(s.Get() - n) }
+
+// Type returns the static value type, for generic helpers and the bridge.
+func (s *NumSignal[T]) Type() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }
+
+// BoolSignal holds a bool.
+type BoolSignal struct{ Signal[bool] }
+
+// Bool returns a bool signal holding v.
+func Bool(v bool) *BoolSignal { return &BoolSignal{Signal[bool]{v: v}} }
+
+// Toggle flips the signal's value.
+func (s *BoolSignal) Toggle() { s.Set(!s.Get()) }
+
+// Type returns the static value type (bool).
+func (s *BoolSignal) Type() reflect.Type { return reflect.TypeOf(false) }
+
+// StrSignal holds a string.
+type StrSignal struct{ Signal[string] }
+
+// Str returns a string signal holding v.
+func Str(v string) *StrSignal { return &StrSignal{Signal[string]{v: v}} }
+
+// Type returns the static value type (string).
+func (s *StrSignal) Type() reflect.Type { return reflect.TypeOf("") }
+
+// ListSignal holds a slice of items, for a keyed list.
+type ListSignal[T any] struct{ Signal[[]T] }
+
+// List returns a list signal holding v.
+func List[T any](v []T) *ListSignal[T] { return &ListSignal[T]{Signal[[]T]{v: v}} }
+
+// Type returns the static value type ([]T).
+func (s *ListSignal[T]) Type() reflect.Type { return reflect.TypeOf((*[]T)(nil)).Elem() }
+
+// Readable is anything a one-way binding can subscribe to: a signal or a memo.
+// It carries the two operations a binding needs — Get for the current value,
+// Subscribe for changes — so a [Memo] binds wherever its signal would.
+type Readable[T any] interface {
+	Get() T
+	Subscribe(func(T)) func()
 }
 
 // equalValues reports whether two values are equal for change-detection

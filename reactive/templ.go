@@ -77,12 +77,10 @@ func BindTempl(el wasmwrap.Element, fn func() templ.Component) (dispose func()) 
 //	//go:build js && wasm
 //
 //	func main() {
-//		count := reactive.NewSignal(0)
+//		count := reactive.Num(0)
 //
 //		reactive.Hydrate("#counter", func(root wasmwrap.Element) {
-//			reactive.BindText(root.Find("[data-count]"), func() string {
-//				return strconv.Itoa(count.Get())
-//			})
+//			reactive.BindText(root.Find("[data-count]"), count)
 //			reactive.On(root.Find("[data-inc]"), "click", func(wasmwrap.Event) {
 //				count.Update(func(v int) int { return v + 1 })
 //			})

@@ -83,7 +83,7 @@ func JS(script templ.Component) templ.Component {
 // whenever a signal it reads changes. Dependencies are discovered by
 // execution — the body must read signals by name, so use [Named]:
 //
-//	count := x.Named("count", 0)
+//	count := x.NamedNumSignal("count", 0)
 //
 //	templ titleScript() {
 //		<script>

@@ -5,62 +5,52 @@
 // the text, attribute or class it owns, and a keyed list moves nodes instead of
 // rebuilding them. Nothing here re-renders a tree and diffs the result.
 //
-// # The pieces
+// # State
 //
-// State — [Signal] holds a value, [Computed] derives one, [Effect] runs work
-// when either changes, [Batch] coalesces a group of writes.
+// State is split into one type per value kind, so what compiles is what is
+// meaningful: [Num] (int/int64/float64), [Bool], [Str] and [List]. Short
+// constructors keep a declaration to one line:
 //
-// DOM — BindText, BindHTML, BindAttr, BindClass, BindStyle, BindShow for
-// one-property bindings; BindValue, BindNumber, BindChecked for form fields;
-// [BindWhen] for a conditional subtree; [BindList] for a keyed list.
+//	count := reactive.Num(0)
+//	open  := reactive.Bool(false)
 //
-// Routing — [Router], [Navigate], [Path], [InterceptLinks].
+// Each is an object with real methods — count.Inc(1) increments now, open.
+// Toggle() flips now. [Computed] derives a read-only memo from a Go closure,
+// [Effect] runs work when a signal it read changes, and [Batch] coalesces a
+// group of writes. The generic [Signal] stays for the cases with no useful kind
+// — a [Resource]'s Data or Err field.
 //
-// Async — [Resource] wraps a loader with Data, Err and Loading signals;
-// [FetchJSON] decodes a response into a Go type.
+// # DOM bindings
 //
-// templ — [Hydrate] binds to markup astwerk already generated; [BindTempl]
-// re-renders a component into an element when you want a whole fragment
-// replaced.
+// Bindings take the signal object directly, so the element renders the value
+// and strconv dies at the call site:
+//
+//	reactive.BindText(label, count)   // a NumSignal or StrSignal
+//	reactive.BindClass(item, "active", selected)
+//	reactive.BindValue(input, draft)  // two-way, form controls
+//
+// Each returns a dispose function; called inside an effect the binding is owned
+// by that effect. [BindList] keeps a container in sync with a [ListSignal],
+// with per-row state via [Row]. [Hydrate] attaches behaviour to markup ssg
+// already generated.
+//
+// # Routing, async, templ
+//
+// [Router], [Navigate] and [Path] drive a single-page app; [Resource] wraps an
+// async loader with Data, Err and Loading. [Hydrate] is the recommended way to
+// use templ in the browser — markup lives in one place, updates stay surgical.
 //
 // # Dependencies are tracked, not declared
 //
 // [Signal.Get] records a dependency on the effect currently running, so an
-// effect subscribes to exactly what it read on its last run. A branch not taken
-// creates no dependency, and a signal read behind an if that later goes the
-// other way stops triggering it:
+// effect subscribes to exactly what it read on its last run. Use [Signal.Peek]
+// to read without subscribing, and [Untracked] for a whole block.
 //
-//	name := reactive.NewSignal("world")
-//	reactive.Effect(func() {
-//		fmt.Println("hello", name.Get()) // re-runs whenever name changes
-//	})
+// # The x bridge
 //
-// Use [Signal.Peek] to read without subscribing, and [Untracked] for a whole
-// block.
-//
-// # Ownership
-//
-// Effects nest. One created inside another is disposed and rebuilt when the
-// outer re-runs, so bindings inside a view that gets rebuilt don't leak.
-// [OnCleanup] hooks into that, and [Scope] groups effects under one owner
-// without making them reactive to anything.
-//
-// Every Bind* function returns a dispose func. Called inside an effect the
-// binding is owned by it, so the return is usually ignorable — it matters at the
-// top level of a script, where nothing else owns it.
-//
-// # Two ways to use templ
-//
-// astwerk already renders templ at build time. In the browser you can either:
-//
-// Bind to that output — [Hydrate] finds server-rendered markup and attaches
-// behaviour. Markup lives in one place, updates stay surgical, nothing renders
-// twice. This is the recommended default.
-//
-// Re-render fragments — [BindTempl] runs a templ component in the browser and
-// assigns the result as innerHTML. Convenient for display-only chunks, but it
-// destroys and rebuilds everything inside the target, losing focus, scroll
-// position and event handlers. See its documentation.
+// [XNum], [XBool], [XStr] and [XList] turn a cell an x page declared (with a
+// Named constructor) into the same state object a local signal is: reads come
+// from the x cell, writes go to it, and both sides update live.
 //
 // # Threading
 //

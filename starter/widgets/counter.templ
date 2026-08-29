@@ -6,21 +6,21 @@ import x "github.com/LukasDerBaum42/astwerk/x"
 // Count is a live counter. It is named so hand-written scripts (see
 // TitleEffect) can read it. Package-level state is shared by every page that
 // renders the widget.
-var Count = x.Named("count", 0)
+var Count = x.NamedNumSignal("count", 0)
 
 // Revealed drives the conditional section below, toggled by the button.
-var Revealed = x.NewSignal(false)
+var Revealed = x.NewBoolSignal(false)
 
 // Counter renders a counter with increment and reset buttons. Wrap the page
 // content in x.Document (see pages/reactive.templ) to make it live; rendered
 // without one it stays static.
 templ Counter() {
 	<div class="counter">
-		@x.Text(Count)
-		@x.El("button", x.On("click", Count.Set(Count.Add(1)))) {
+		@Count
+		@x.El("button", x.On("click", Count.Inc(1))) {
 			+
 		}
-		@x.El("button", x.On("click", Count.Set(x.Lit(0)))) {
+		@x.El("button", x.On("click", Count.SetTo(0))) {
 			reset
 		}
 	</div>
@@ -30,7 +30,7 @@ templ Counter() {
 // while hidden, and rebuilt fresh on every reveal — unlike Show, which only
 // toggles visibility and keeps state.
 templ Reveal() {
-	@x.El("button", x.On("click", Revealed.Set(x.Not(Revealed)))) {
+	@x.El("button", x.On("click", Revealed.Toggle())) {
 		toggle
 	}
 	@x.When(Revealed, revealBody())

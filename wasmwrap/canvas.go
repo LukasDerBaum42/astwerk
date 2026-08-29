@@ -57,21 +57,25 @@ func (c Ctx2D) Value() js.Value { return c.v }
 
 // --- State ---
 
+// FillStyle sets the fill color, used by Fill and FillRect.
 func (c Ctx2D) FillStyle(color string) Ctx2D {
 	c.v.Set("fillStyle", color)
 	return c
 }
 
+// StrokeStyle sets the stroke color, used by Stroke and StrokeRect.
 func (c Ctx2D) StrokeStyle(color string) Ctx2D {
 	c.v.Set("strokeStyle", color)
 	return c
 }
 
+// LineWidth sets the stroke width in pixels.
 func (c Ctx2D) LineWidth(w float64) Ctx2D {
 	c.v.Set("lineWidth", w)
 	return c
 }
 
+// Font sets the text font, in the CSS font shorthand ("16px sans-serif").
 func (c Ctx2D) Font(f string) Ctx2D {
 	c.v.Set("font", f)
 	return c
@@ -83,6 +87,7 @@ func (c Ctx2D) Save() Ctx2D {
 	return c
 }
 
+// Restore pops the drawing state pushed by [Ctx2D.Save].
 func (c Ctx2D) Restore() Ctx2D {
 	c.v.Call("restore")
 	return c
@@ -90,11 +95,13 @@ func (c Ctx2D) Restore() Ctx2D {
 
 // --- Rectangles ---
 
+// FillRect draws a filled rectangle at (x, y) of the given size.
 func (c Ctx2D) FillRect(x, y, w, h float64) Ctx2D {
 	c.v.Call("fillRect", x, y, w, h)
 	return c
 }
 
+// StrokeRect draws the outline of a rectangle at (x, y) of the given size.
 func (c Ctx2D) StrokeRect(x, y, w, h float64) Ctx2D {
 	c.v.Call("strokeRect", x, y, w, h)
 	return c
@@ -113,16 +120,19 @@ func (c Ctx2D) BeginPath() Ctx2D {
 	return c
 }
 
+// ClosePath closes the current subpath with a straight line back to its start.
 func (c Ctx2D) ClosePath() Ctx2D {
 	c.v.Call("closePath")
 	return c
 }
 
+// MoveTo starts a new subpath at (x, y), moving without drawing.
 func (c Ctx2D) MoveTo(x, y float64) Ctx2D {
 	c.v.Call("moveTo", x, y)
 	return c
 }
 
+// LineTo draws a straight line from the current point to (x, y).
 func (c Ctx2D) LineTo(x, y float64) Ctx2D {
 	c.v.Call("lineTo", x, y)
 	return c
@@ -134,11 +144,13 @@ func (c Ctx2D) Arc(x, y, radius, startAngle, endAngle float64) Ctx2D {
 	return c
 }
 
+// Fill paints the current path with the fill style.
 func (c Ctx2D) Fill() Ctx2D {
 	c.v.Call("fill")
 	return c
 }
 
+// Stroke draws the current path's outline with the stroke style.
 func (c Ctx2D) Stroke() Ctx2D {
 	c.v.Call("stroke")
 	return c
@@ -146,6 +158,7 @@ func (c Ctx2D) Stroke() Ctx2D {
 
 // --- Text ---
 
+// FillText draws text at (x, y) using the current font and fill style.
 func (c Ctx2D) FillText(text string, x, y float64) Ctx2D {
 	c.v.Call("fillText", text, x, y)
 	return c

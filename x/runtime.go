@@ -117,34 +117,44 @@ const runtimeWhen = `	const when = (id, html, s) => {
 `
 
 const runtimeList = `	const list = (id, s, key, template) => {
-		const n = el(id);
-		if (!n) return;
-		const live = new Map();
-		for (const c of n.children) {
-			if (c.dataset.key) live.set(c.dataset.key, c);
-		}
-		s.sub((items) => {
-			const seen = new Set();
-			const ordered = [];
-			for (const item of items) {
-				const k = String(item[key]);
-				if (seen.has(k)) continue;
-				seen.add(k);
-				let c = live.get(k);
-				if (!c && template) {
-					const wrap = document.createElement("div");
-					wrap.innerHTML = template(item);
-					c = wrap.firstElementChild;
-					if (c) { c.dataset.key = k; live.set(k, c); }
+			const n = el(id);
+			if (!n) return;
+			const live = new Map();
+			for (const c of n.children) {
+				if (c.dataset.key) live.set(c.dataset.key, c);
+			}
+			s.sub((items) => {
+				const seen = new Set();
+				const ordered = [];
+				for (const item of items) {
+					const k = String(item[key]);
+					if (seen.has(k)) continue;
+					seen.add(k);
+					let c = live.get(k);
+					if (!c && template) {
+						const wrap = document.createElement("div");
+						wrap.innerHTML = template(item);
+						c = wrap.firstElementChild;
+						if (c) { c.dataset.key = k; live.set(k, c); }
+					}
+					if (c) ordered.push(c);
 				}
-				if (c) ordered.push(c);
-			}
-			for (const [k, c] of live) {
-				if (!seen.has(k)) { c.remove(); live.delete(k); }
-			}
-			for (const c of ordered) n.appendChild(c);
-		});
-	};
+				for (const [k, c] of live) {
+					if (!seen.has(k)) { c.remove(); live.delete(k); }
+				}
+				for (const c of ordered) n.appendChild(c);
+			});
+		};
+`
+
+// runtimeRegister is the bridge's x-side half: named signals are emitted as
+// lexical consts, not globalThis properties, so a wasm module cannot reach them
+// by name. The registry records the cells that carry an explicit name — the
+// only ones whose identity is stable API — and lets the wasm side look one up.
+// It ships only when a page declares a named signal.
+const runtimeRegister = `	const states = {};
+	const register = (name, s) => { states[name] = s; };
+	const state = (name) => states[name];
 `
 
 // runtimeFeatures are the optional runtime pieces, in dependency order: the
@@ -170,4 +180,5 @@ var runtimeFeatures = []struct {
 	{key: "checked", export: "checked", code: runtimeChecked},
 	{key: "when", export: "when", code: runtimeWhen},
 	{key: "list", export: "list", code: runtimeList},
+	{key: "register", export: "state", code: runtimeRegister},
 }

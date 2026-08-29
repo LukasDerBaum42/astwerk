@@ -89,6 +89,18 @@ func FetchString(url string) (string, error) {
 	return string(b), err
 }
 
+// FetchAsync GETs url and calls cb with the body, without blocking the caller.
+//
+// It is [Fetch] run on a fresh goroutine, so it is safe from inside an event
+// handler — the handler returns immediately, and cb runs once the response
+// lands. cb may touch the DOM; it just must not block.
+func FetchAsync(url string, cb func(body []byte, err error)) {
+	go func() {
+		body, err := Fetch(url)
+		cb(body, err)
+	}()
+}
+
 // await blocks until promise settles. The Go runtime hands control back to the
 // JS event loop while every goroutine is blocked, so the promise still resolves.
 func await(promise js.Value) (js.Value, error) {

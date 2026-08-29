@@ -33,11 +33,16 @@ const DefaultOutDir = "build"
 // Children are visited in sorted key order, so a build is reproducible and a
 // failure always reports the same node first. [BuildOptions.Parallel] gives up
 // the visit order but keeps both guarantees.
+//
+// With [BuildOptions.Changed] set, the build is incremental: only nodes whose
+// [Node.DependsOn] intersects the changed files are rebuilt, and OutDir is left
+// in place.
 func Build(root Node, opts BuildOptions) error {
 	if opts.OutDir == "" {
 		opts.OutDir = DefaultOutDir
 	}
-	if !opts.Dev {
+	cs := normalizeChanged(opts.Changed)
+	if !opts.Dev && !cs.incremental() {
 		if err := os.RemoveAll(opts.OutDir); err != nil {
 			return fmt.Errorf("ssg: clean %s: %w", opts.OutDir, err)
 		}
@@ -45,13 +50,27 @@ func Build(root Node, opts BuildOptions) error {
 	if err := os.MkdirAll(opts.OutDir, 0755); err != nil {
 		return fmt.Errorf("ssg: create %s: %w", opts.OutDir, err)
 	}
-	return buildNode(root, opts.OutDir, "", nil, opts)
+	if opts.Pre != nil {
+		if err := opts.Pre(); err != nil {
+			return fmt.Errorf("ssg: pre: %w", err)
+		}
+	}
+	if err := buildNode(root, opts.OutDir, "", nil, opts, cs); err != nil {
+		return err
+	}
+	if opts.Post != nil {
+		if err := opts.Post(); err != nil {
+			return fmt.Errorf("ssg: post: %w", err)
+		}
+	}
+	return nil
 }
 
 // buildNode writes one node. dir is its output directory, sitePath its path
 // relative to the site root ("" at the root, "de/about/" deeper down), and loc
-// the locale it was mounted under, if any.
-func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions) error {
+// the locale it was mounted under, if any. cs is the incremental changed set;
+// an empty cs means a full build.
+func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions, cs changedSet) error {
 	if n.locale != nil {
 		loc = n.locale
 	}
@@ -66,49 +85,56 @@ func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions) 
 		ctx.Locale, ctx.Prefix = loc.code, loc.prefix
 	}
 
-	if n.Page != nil || len(n.Files) > 0 || n.CopyFrom != "" || n.CompileFrom != "" {
+	// A node renders its own output when the build is full, or when one of its
+	// declared dependencies changed. Children are still walked either way, so an
+	// affected descendant is reached even when its parent is not.
+	affected := !cs.incremental() || nodeAffected(n, cs)
+
+	if affected && (n.Page != nil || len(n.Files) > 0 || n.CopyFrom != "" || n.CompileFrom != "") {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("ssg: create %s: %w", dir, err)
 		}
 	}
 
-	if n.Page != nil {
-		if err := renderFile(filepath.Join(dir, "index.html"), n.Page(ctx), opts.Dev); err != nil {
-			return err
+	if affected {
+		if n.Page != nil {
+			if err := renderFile(filepath.Join(dir, "index.html"), n.Page(ctx), opts.Dev); err != nil {
+				return err
+			}
 		}
-	}
 
-	for _, name := range slices.Sorted(maps.Keys(n.Files)) {
-		fn := n.Files[name]
-		if fn == nil {
-			continue
+		for _, name := range slices.Sorted(maps.Keys(n.Files)) {
+			fn := n.Files[name]
+			if fn == nil {
+				continue
+			}
+			path, err := resolve(dir, name)
+			if err != nil {
+				return fmt.Errorf("ssg: file %q in %s: %w", name, dir, err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				return fmt.Errorf("ssg: create %s: %w", filepath.Dir(path), err)
+			}
+			if err := renderFile(path, fn(ctx), opts.Dev); err != nil {
+				return err
+			}
 		}
-		path, err := resolve(dir, name)
-		if err != nil {
-			return fmt.Errorf("ssg: file %q in %s: %w", name, dir, err)
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return fmt.Errorf("ssg: create %s: %w", filepath.Dir(path), err)
-		}
-		if err := renderFile(path, fn(ctx), opts.Dev); err != nil {
-			return err
-		}
-	}
 
-	if n.CopyFrom != "" {
-		if err := devCopyFS(dir, os.DirFS(n.CopyFrom), opts.Dev); err != nil {
-			return fmt.Errorf("ssg: copy %s -> %s: %w", n.CopyFrom, dir, err)
+		if n.CopyFrom != "" {
+			if err := devCopyFS(dir, os.DirFS(n.CopyFrom), opts.Dev); err != nil {
+				return fmt.Errorf("ssg: copy %s -> %s: %w", n.CopyFrom, dir, err)
+			}
 		}
-	}
 
-	if n.CompileFrom != "" {
-		if err := CompileScripts(n.CompileFrom, dir); err != nil {
-			return fmt.Errorf("ssg: compile %s -> %s: %w", n.CompileFrom, dir, err)
+		if n.CompileFrom != "" {
+			if err := CompileScripts(n.CompileFrom, dir); err != nil {
+				return fmt.Errorf("ssg: compile %s -> %s: %w", n.CompileFrom, dir, err)
+			}
 		}
 	}
 
 	children := n.Children
-	if n.Generate != nil {
+	if n.Generate != nil && affected {
 		merged := make(map[string]Node, len(n.Children))
 		maps.Copy(merged, n.Children)
 		maps.Copy(merged, n.Generate()) // generated keys win on collision
@@ -122,7 +148,7 @@ func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions) 
 		if err != nil {
 			return fmt.Errorf("ssg: child %q of %s: %w", key, dir, err)
 		}
-		return buildNode(children[key], sub, joinPath(sitePath, key), loc, opts)
+		return buildNode(children[key], sub, joinPath(sitePath, key), loc, opts, cs)
 	}
 
 	if !opts.Parallel {
@@ -134,6 +160,54 @@ func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions) 
 		return nil
 	}
 	return inParallel(len(keys), build)
+}
+
+// changedSet is the set of changed files for an incremental build. A nil slice
+// means "full build": every node renders.
+type changedSet []string
+
+// normalizeChanged turns changed paths into cleaned absolute slash-separated
+// paths, so [Node.DependsOn] entries match them regardless of how either was
+// written. An empty or nil input yields a nil set (a full build).
+func normalizeChanged(changed []string) changedSet {
+	if len(changed) == 0 {
+		return nil
+	}
+	out := make(changedSet, 0, len(changed))
+	for _, p := range changed {
+		if a, err := filepath.Abs(p); err == nil {
+			out = append(out, filepath.ToSlash(filepath.Clean(a)))
+		}
+	}
+	return out
+}
+
+func (cs changedSet) incremental() bool { return len(cs) > 0 }
+
+// matches reports whether dep — a [Node.DependsOn] entry, which may name a file
+// or a directory — is satisfied by any changed path. A directory entry matches
+// every file beneath it.
+func (cs changedSet) matches(dep string) bool {
+	a, err := filepath.Abs(dep)
+	if err != nil {
+		return false
+	}
+	d := filepath.ToSlash(filepath.Clean(a))
+	for _, c := range cs {
+		if c == d || strings.HasPrefix(c, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeAffected(n Node, cs changedSet) bool {
+	for _, dep := range n.DependsOn {
+		if cs.matches(dep) {
+			return true
+		}
+	}
+	return false
 }
 
 // inParallel runs fn for every index at once, bounded by GOMAXPROCS, and
