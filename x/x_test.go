@@ -448,15 +448,24 @@ func TestMinified(t *testing.T) {
 		t.Errorf("minified output (%d bytes) not smaller than dev (%d bytes)", len(out), len(dev))
 	}
 
-	head := out[strings.Index(out, "(() =>"):strings.Index(out, "\n\nconst")]
-	if strings.Contains(head, "\n") {
-		t.Errorf("minified runtime still has line breaks:\n%s", head)
-	}
-	if !strings.Contains(head, "globalThis.aw = { signal, text };") {
-		t.Errorf("minified runtime missing exports:\n%s", head)
+	if !strings.Contains(out, "globalThis.aw = { signal, text };") {
+		t.Errorf("minified runtime missing exports:\n%s", out)
 	}
 	if !strings.Contains(out, "const s0 = aw.signal(0);") {
 		t.Errorf("declarations missing:\n%s", out)
+	}
+	// The minified runtime must keep the signal's set method: the fragments
+	// carry // comments immediately before it, and stripping line breaks would
+	// let a comment swallow set() — the production bug.
+	if !strings.Contains(out, "set: (nv) => { if (nv !== v) { v = nv; [...subs].forEach((f) => f(v)); } }") {
+		t.Errorf("minified runtime lost the signal's set method:\n%s", out)
+	}
+}
+
+func TestMinifyJSPreservesLineComments(t *testing.T) {
+	in := "a();\n\t// a comment\n\tb();"
+	if got, want := minifyJS(in), "a();\n// a comment\nb();"; got != want {
+		t.Errorf("minifyJS = %q, want %q (line breaks must survive so comments stay line comments)", got, want)
 	}
 }
 

@@ -29,8 +29,8 @@
 //   - elements: tagName, children, appendChild, insertBefore, remove,
 //     cloneNode, textContent, innerHTML, attributes, classList, style,
 //     value/checked, getBoundingClientRect;
-//   - selectors, limited to "#id", ".class", "[attr]" and a bare tag name,
-//     for querySelector, querySelectorAll and closest;
+//   - selectors, limited to "#id", ".class", "[attr]", "[attr=\"value\"]" and a
+//     bare tag name, for querySelector, querySelectorAll and closest;
 //   - events: addEventListener, removeEventListener and a dispatch helper;
 //   - a 2D canvas context that records its calls;
 //   - location, history and requestAnimationFrame, so the router has
@@ -169,7 +169,18 @@ const source = `
   function hits(el, sel) {
     if (sel[0] === "#") return el._attrs.id === sel.slice(1);
     if (sel[0] === ".") return el._classes.has(sel.slice(1));
-    if (sel[0] === "[") return sel.slice(1, -1) in el._attrs;
+    if (sel[0] === "[") {
+      const inner = sel.slice(1, -1);
+      const eq = inner.indexOf("=");
+      if (eq < 0) return inner in el._attrs;
+      const name = inner.slice(0, eq).trim();
+      let value = inner.slice(eq + 1).trim();
+      if ((value[0] === '"' && value[value.length - 1] === '"') ||
+          (value[0] === "'" && value[value.length - 1] === "'")) {
+        value = value.slice(1, -1);
+      }
+      return el._attrs[name] === value;
+    }
     return el.tagName === sel.toUpperCase();
   }
   function walk(nodes, fn) { for (const n of nodes) { fn(n); walk(n._children, fn); } }

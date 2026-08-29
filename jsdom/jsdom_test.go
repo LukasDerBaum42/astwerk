@@ -67,13 +67,16 @@ func TestAttributesClassesAndSelectors(t *testing.T) {
 	body.Call("appendChild", el)
 
 	doc := js.Global().Get("document")
-	for _, sel := range []string{"#box", ".on", "[data-x]", "span"} {
+	for _, sel := range []string{"#box", ".on", "[data-x]", "[data-x=\"1\"]", "[data-x='1']", "span"} {
 		if !doc.Call("querySelector", sel).Truthy() {
 			t.Errorf("querySelector(%q) found nothing", sel)
 		}
 	}
 	if got := doc.Call("querySelectorAll", "span").Length(); got != 1 {
 		t.Errorf("querySelectorAll(\"span\") returned %d, want 1", got)
+	}
+	if doc.Call("querySelector", "[data-x=\"2\"]").Truthy() {
+		t.Error("querySelector([data-x=\"2\"]) matched but the value differs")
 	}
 	if got := el.Call("closest", "#box"); !got.Truthy() {
 		t.Error("closest did not match the element itself")

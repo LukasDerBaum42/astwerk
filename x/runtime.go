@@ -2,17 +2,18 @@ package x
 
 import "strings"
 
-// minifyJS compacts generated JavaScript by stripping indentation and joining
-// lines. It is applied only to the runtime, which this package generated and
-// which is semicolon-terminated throughout, so joining lines cannot change
-// meaning. User-authored JavaScript (effect bodies) is never passed through
-// it: automatic-semicolon-insertion makes that unsafe.
+// minifyJS compacts generated JavaScript by stripping leading indentation.
+// Line breaks are preserved: the runtime fragments contain // comments, so
+// joining the lines would let a comment swallow the code that followed it on
+// the joined line (the production bug where the signal's set method was
+// commented out). User-authored JavaScript (effect bodies) is never passed
+// through it: automatic-semicolon-insertion makes that unsafe.
 func minifyJS(s string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(s, "\n") {
-		b.WriteString(strings.TrimLeft(line, " \t"))
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimLeft(line, " \t")
 	}
-	return b.String()
+	return strings.Join(lines, "\n")
 }
 
 // The browser runtime is assembled per page from small fragments, so a page
