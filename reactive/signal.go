@@ -78,7 +78,10 @@ func (s *Signal[T]) Update(fn func(T) T) { s.Set(fn(s.v)) }
 // It does not fire for the current value; call fn yourself first if you need
 // that. The returned function unsubscribes.
 func (s *Signal[T]) Subscribe(fn func(T)) (unsubscribe func()) {
-	e := &effect{fn: func() { fn(s.v) }}
+	// Reading through Get() inside the effect re-links it on every run — the
+	// same mechanism Effect uses — so the subscriber fires on *every* change,
+	// not just the first one.
+	e := &effect{fn: func() { fn(s.Get()) }}
 	// Linked by hand rather than by running it: a subscriber fires on the next
 	// change, not immediately.
 	link(e, &s.src)

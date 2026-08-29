@@ -113,6 +113,22 @@ func TestSubscribeFiresOnChangeOnly(t *testing.T) {
 	}
 }
 
+// A subscriber must fire on every change, not just the first one — the bridge
+// mirror's Go→JS write path depends on it (a second wasm write would otherwise
+// never reach the x cell).
+func TestSubscribeFiresOnEveryChange(t *testing.T) {
+	s := Num(0)
+	var seen []int
+	s.Subscribe(func(v int) { seen = append(seen, v) })
+
+	s.Set(1)
+	s.Set(2)
+	s.Set(3)
+	if fmt.Sprint(seen) != fmt.Sprint([]int{1, 2, 3}) {
+		t.Errorf("seen = %v, want [1 2 3] — Subscribe must fire on every change", seen)
+	}
+}
+
 // Dependencies are re-collected each run, so a branch not taken stops tracking.
 func TestDynamicDependencies(t *testing.T) {
 	useA := NewSignal(true)

@@ -104,11 +104,17 @@ const source = `
       this._classes = new Set(); this._attrs = {}; this._children = [];
       this._listeners = {}; this._ctxCalls = [];
       this.style = new Style();
-      this.textContent = ""; this.innerHTML = ""; this.parentElement = null;
+      this._text = ""; this._html = ""; this.parentElement = null;
       this.value = ""; this.checked = false;
       this.width = 0; this.height = 0;
       this._rect = { left: 0, top: 0, width: 0, height: 0 };
     }
+    // A real DOM coerces text assignments to strings; the stub stores them raw
+    // otherwise, and a binding writing a number would read back as a number.
+    get textContent() { return this._text; }
+    set textContent(v) { this._text = String(v); }
+    get innerHTML() { return this._html; }
+    set innerHTML(v) { this._html = String(v); }
     get classList() { return new Cls(this); }
     get children() { return this._children; }
     appendChild(c) {
