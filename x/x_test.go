@@ -454,18 +454,25 @@ func TestMinified(t *testing.T) {
 	if !strings.Contains(out, "const s0 = aw.signal(0);") {
 		t.Errorf("declarations missing:\n%s", out)
 	}
-	// The minified runtime must keep the signal's set method: the fragments
-	// carry // comments immediately before it, and stripping line breaks would
-	// let a comment swallow set() — the production bug.
+	// The minified runtime must keep the signal's set method: the fragments carry
+	// // comments immediately before it, and the minifier must remove those
+	// comments rather than let them swallow the code that follows.
 	if !strings.Contains(out, "set: (nv) => { if (nv !== v) { v = nv; [...subs].forEach((f) => f(v)); } }") {
 		t.Errorf("minified runtime lost the signal's set method:\n%s", out)
 	}
 }
 
-func TestMinifyJSPreservesLineComments(t *testing.T) {
+func TestMinifyJSStripsComments(t *testing.T) {
 	in := "a();\n\t// a comment\n\tb();"
-	if got, want := minifyJS(in), "a();\n// a comment\nb();"; got != want {
-		t.Errorf("minifyJS = %q, want %q (line breaks must survive so comments stay line comments)", got, want)
+	if got, want := minifyJS(in), "a(); b();"; got != want {
+		t.Errorf("minifyJS = %q, want %q (comments and extra whitespace must be removed)", got, want)
+	}
+}
+
+func TestMinifyJSPreservesStrings(t *testing.T) {
+	in := "a(\"http://example.com\");"
+	if got, want := minifyJS(in), "a(\"http://example.com\");"; got != want {
+		t.Errorf("minifyJS = %q, want %q (a // inside a string must survive)", got, want)
 	}
 }
 

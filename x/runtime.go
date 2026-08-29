@@ -2,18 +2,67 @@ package x
 
 import "strings"
 
-// minifyJS compacts generated JavaScript by stripping leading indentation.
-// Line breaks are preserved: the runtime fragments contain // comments, so
-// joining the lines would let a comment swallow the code that followed it on
-// the joined line (the production bug where the signal's set method was
-// commented out). User-authored JavaScript (effect bodies) is never passed
-// through it: automatic-semicolon-insertion makes that unsafe.
+// minifyJS compacts the generated runtime by removing its // and /* */ comments
+// and collapsing runs of whitespace to a single space. It is string-aware, so a
+// "/" or "//" inside a string literal is left alone. It assumes the input has no
+// template or regexp literals, which holds for the runtime fragments it is
+// applied to. User-authored JavaScript (effect bodies) is never passed through
+// it: automatic-semicolon-insertion and opaque string contents make that unsafe.
 func minifyJS(s string) string {
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimLeft(line, " \t")
+	var b strings.Builder
+	prevSpace := false
+	writeSpace := func() {
+		if b.Len() > 0 && !prevSpace {
+			b.WriteByte(' ')
+			prevSpace = true
+		}
 	}
-	return strings.Join(lines, "\n")
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			writeSpace()
+			i++
+		case c == '/' && i+1 < len(s) && s[i+1] == '/':
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(s) && s[i+1] == '*':
+			i += 2
+			for i+1 < len(s) && !(s[i] == '*' && s[i+1] == '/') {
+				i++
+			}
+			if i+1 < len(s) {
+				i += 2
+			} else {
+				i = len(s)
+			}
+			writeSpace()
+		case c == '"' || c == '\'' || c == '`':
+			quote := c
+			b.WriteByte(c)
+			i++
+			for i < len(s) {
+				ch := s[i]
+				b.WriteByte(ch)
+				if ch == '\\' && i+1 < len(s) {
+					b.WriteByte(s[i+1])
+					i += 2
+					continue
+				}
+				i++
+				if ch == quote {
+					break
+				}
+			}
+			prevSpace = false
+		default:
+			b.WriteByte(c)
+			prevSpace = false
+			i++
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // The browser runtime is assembled per page from small fragments, so a page
