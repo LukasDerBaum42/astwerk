@@ -3,7 +3,8 @@
 ![CI](https://github.com/LukasDerBaum42/astwerk/actions/workflows/ci.yml/badge.svg)
 
 A minimal, no-magic static site generator library for Go + [templ](https://templ.guide).
-No Node.js, no JS build tooling; optional client-side scripting via Go→WASM.
+No Node.js, no JS build tooling. Client-side code lives in the optional
+[astwerk-live](https://github.com/LukasDerBaum42/astwerk-live) extension.
 
 Design law: **abstract only the repeating boilerplate.** If a project needs
 something the tree can't express, it falls back to plain Go — never a wall it
@@ -29,19 +30,19 @@ All of §2–§7 is implemented, plus §11.1–§11.3 of the follow-up list.
 ssg/        Node, Build, BuildLocales, CompileScripts
 content/    Load, LoadDir, LoadTree, Decode, Slugs, Chunk
 devserver/  watch, rebuild, live reload
-wasmwrap/   DOM, style, events, timers, fetch, canvas   (js/wasm only)
-reactive/   signals, bindings, keyed lists, router, resources, templ interop
-x/          compiled reactive markup — JS emitted at build time, no WASM
-jsdom/      fake DOM for testing bindings without a browser  (js/wasm only)
-starter/    17 copyable .templ files — see starter/README.md
+starter/    13 copyable .templ files — see starter/README.md
 ```
+
+Client-side packages (`x`, `reactive`, `wasmwrap`, `jsdom`) live in the
+opt-in [astwerk-live](https://github.com/LukasDerBaum42/astwerk-live)
+extension, which builds on the `ssg.Steps` seam described below.
 
 `astwerk-spec.md` is the original design sheet. Sections 2, 4, 6a and 9 describe
 API that has since changed — the README, the docs site and the source are
 current; the spec is a historical record. §11 is the forward-looking half of
 that original design; §12 (`astwerk/x`, compiled reactive markup) is **shipped**
 — the spec's §12 is the historical proposal, and the current API lives in
-`x/doc.go` and the docs site.
+astwerk-live's `x/doc.go` and the docs site.
 
 ---
 
@@ -315,60 +316,25 @@ Two rules worth knowing:
 
 ---
 
-## `wasmwrap` — client-side scripting
+## Client-side code — `astwerk-live`
 
-Optional. `syscall/js` made to feel like Go, for the browser half of a site.
-It exists only under `GOOS=js GOARCH=wasm`, so a script needs the matching
-constraint:
-
-```go
-//go:build js && wasm
-
-package main
-
-import "github.com/LukasDerBaum42/astwerk/wasmwrap"
-
-func main() {
-	nav := wasmwrap.Query("#nav")
-	wasmwrap.Query("#toggle").On("click", func(e wasmwrap.Event) {
-		e.PreventDefault()
-		nav.Class().Toggle("open")
-	})
-	select {} // keep the module alive for the handlers
-}
-```
-
-Everything that has nothing to return returns its receiver, so calls chain:
-
-```go
-wasmwrap.Query("#box").Style().Color("red").Display("block")
-```
+Everything that runs in the browser lives in the opt-in
+[astwerk-live](https://github.com/LukasDerBaum42/astwerk-live) extension:
 
 | | |
 | --- | --- |
-| `Query`, `QueryAll`, `Create`, `Body`, `Doc` | finding and making elements |
-| `Element` | `Append`, `Remove`, `Clone`, `Find`, `Parent`, `Children` |
-| | `Text`/`SetText`, `HTML`/`SetHTML`, `Attr`/`SetAttr`, `InputValue` |
-| | `Class()` → `Add`/`Remove`/`Toggle`/`Has` |
-| `Style()` | `Color`, `Display`, `Background`, `Size`, `Position`, `Hide`/`Show`, `Set` for anything else |
-| `On`, `Once` | event binding; both return an unsubscribe func |
-| `Event` | `PreventDefault`, `StopPropagation`, `Target`, `Key`, `Pos`, `PosIn` |
-| `SetTimeout`, `SetInterval` | return a cancel func |
-| `Fetch`, `FetchString` | blocking; no promise at the call site |
-| `AsCanvas()` | `Context2D`, `SetSize`, `FitToDisplay` |
-| `Ctx2D` | typed 2D drawing, plus `RequestAnimationFrame` for an animation loop |
+| `x` | compiled reactive markup — JS emitted at build time, no WASM |
+| `reactive` | signals, bindings, keyed lists, router, resources, templ interop |
+| `wasmwrap` | `syscall/js` made to feel like Go (js/wasm only) |
+| `jsdom` | fake DOM for testing bindings without a browser (js/wasm only) |
 
-Two things worth knowing:
+```sh
+go get github.com/LukasDerBaum42/astwerk-live
+```
 
-- **A failed `Query` is inert, not a panic.** Check `Element.Exists()`; readers
-  like `Text()` return zero values rather than blowing up on a null node.
-- **`Fetch` blocks its goroutine**, which is fine from `main` — when every
-  goroutine blocks, the runtime returns control to the JS event loop. It is
-  *not* safe directly inside an event handler, which runs on a callback
-  goroutine the event loop is waiting on. Use `go func() { ... }()` there.
-
-Anything not modeled drops to `.Value()` and raw `syscall/js`, so the wrapper is
-a shortcut, never a dead end.
+Core keeps the build side: `ssg.CompileScripts` (below) still compiles
+`js && wasm` scripts, and the build-step seam (`ssg.Steps`) is what the
+extension hooks into.
 
 ## Scripts
 
@@ -436,153 +402,14 @@ same loop with no extra plumbing.
 
 ---
 
-## `x` — compiled reactive markup
 
-Interactive UI without WASM and without a JS framework. Markers are ordinary Go
-functions that render at the exact spot they are used, owning the element they
-produce: `@count` writes the value *and* the JavaScript that keeps it in sync,
-in the same call. There is no build pass, no transpiler, and nothing to
-re-render client-side.
-
-```go
-var count = x.NamedNumSignal("count", 0)
-```
-
-```templ
-templ Counter(title string, path string, prefix string) {
-	@layout.BaseLayout(title, path, prefix) {
-		@x.Document(counter())
-	}
-}
-
-templ counter() {
-	<div>
-		@count
-		@x.El("button", x.On("click", count.Inc(1))) {
-			+
-		}
-	</div>
-}
-```
-
-`x.Document` emits a small runtime and the state declarations before the
-markup, and the bindings after it; outside a Document the markers render plain
-static HTML, so reactivity is opt-in and pages read fine with JavaScript
-disabled. The runtime is assembled per page from fragments, so a counter page
-ships roughly the runtime for a counter — not a framework.
-
-The marker set: `Text`, `El` with bindings (`On`, `Attr`, `Class`, `Disabled`,
-`Show`, `Style`), two-way forms (`Input`, `Number`, `Checkbox`), `Computed`,
-`Effect`, `When` and keyed `List`. Handlers are one-word actions
-(`count.Inc(1)`, `count.SetTo(0)`, `open.Toggle()`) composed with `x.Seq` and
-`x.If`; expressions are package functions (`x.Add`, `x.Mul`, `x.Concat`, …).
-Anything past that is a `<script>` reading the named signals directly — the
-escape hatch, not a wall. See the `widgets/` starter files for a full example.
-
-`x` and the WASM `reactive` package are two implementations of the same
-reactive model. `x` is the lightweight path for the common 90%; WASM stays
-available for anything that needs full Go in the browser.
-
-## `reactive` — interactive UI (WASM)
-
-Opt-in, on top of `wasmwrap`. Fine-grained rather than virtual-DOM: a binding
-updates exactly the property it owns, and a keyed list moves nodes rather than
-rebuilding them.
-
-```go
-count := reactive.NewSignal(0)
-doubled := reactive.Computed(func() int { return count.Get() * 2 })
-
-reactive.BindText(out, func() string { return strconv.Itoa(doubled.Get()) })
-reactive.On(btn, "click", func(wasmwrap.Event) {
-	count.Update(func(v int) int { return v + 1 })
-})
-```
-
-Dependencies are tracked, not declared: `Signal.Get` records a dependency on
-whatever effect is running, so an effect subscribes to exactly what it read last
-time. A branch not taken creates no dependency.
-
-| | |
-| --- | --- |
-| **State** | `Signal` (`Get`/`Set`/`Peek`/`Update`/`Subscribe`), `Computed` → `Memo`, `Effect`, `Batch`, `Untracked` |
-| **Lifecycle** | `OnCleanup`, `Scope`; effects nest and dispose their children |
-| **DOM** | `BindText`, `BindHTML`, `BindAttr`, `BindClass`, `BindStyle`, `BindShow` |
-| **Forms** | `BindValue`, `BindNumber`, `BindChecked` — two-way |
-| **Structure** | `BindWhen` (conditional subtree), `BindList` (keyed) |
-| **Routing** | `Router`, `Route`, `Params`, `Navigate`, `Replace`, `Path`, `InterceptLinks` |
-| **Async** | `Resource` with `Data`/`Err`/`Loading` signals, `FetchJSON[T]` |
-| **templ** | `Hydrate`, `HydrateAll`, `BindTempl`, `TemplElement`, `RenderTempl` |
-
-Routes match segment by segment — `/projects/:slug` captures, `/docs/*` catches
-the rest — and each view gets its own scope, so navigating away disposes its
-effects.
-
-### Using templ in the browser
-
-templ is pure Go, so it compiles to wasm and runs client-side unchanged. There
-are two ways to use it, and they are not equally good:
-
-**Bind to the markup astwerk already generated** — the recommended default.
-`ssg.Build` renders your templ at build time; a script attaches behaviour to it.
-Markup stays in one place, updates stay surgical, nothing renders twice.
-
-```go
-reactive.Hydrate("#counter", func(root wasmwrap.Element) {
-	reactive.BindText(root.Find("[data-count]"), func() string {
-		return strconv.Itoa(count.Get())
-	})
-	reactive.On(root.Find("[data-inc]"), "click", func(wasmwrap.Event) {
-		count.Update(func(v int) int { return v + 1 })
-	})
-})
-```
-
-**Re-render fragments client-side** — `BindTempl` runs a component in the browser
-and assigns the output as innerHTML. Convenient, but templ produces a *string*,
-so there is nothing to patch against: everything inside the target is destroyed
-and rebuilt, losing input focus, scroll position, selection and any handler bound
-inside. Fine for a display-only panel, wrong for anything interactive.
-
-```go
-reactive.BindTempl(preview, func() templ.Component {
-	return views.Markdown(source.Get())
-})
-```
-
-### Testing bindings without a browser
-
-`jsdom` is a small fake DOM — the one astwerk's own tests run against, exported
-so yours can too:
-
-```go
-//go:build js && wasm
-
-func init() { jsdom.Install() }
-
-func TestCounter(t *testing.T) {
-	jsdom.Reset()
-	root := wasmwrap.Wrap(jsdom.NewElement("div"))
-	// mount your bindings into root, then assert against it
-}
-```
-
-```sh
-export PATH="$PATH:$(go env GOROOT)/lib/wasm"
-GOOS=js GOARCH=wasm go test ./...
-```
-
-It's not a browser and won't become one — layout, the CSS cascade, focus and
-paint are out of scope, and selectors are limited to `#id`, `.class`, `[attr]`
-and a bare tag name. It answers "did my Go code reach for the right property
-with the right arguments", which is what a binding test is actually asking.
 
 ## `starter/`
 
-17 copyable `.templ` files — layouts, a list+detail collection, pages, wasm
-hosts, the `widgets/` reactive components, SEO and RSS. Not importable and not
-wired into `Build`: you copy them in
-and they become your code. See [starter/README.md](starter/README.md).
+13 copyable `.templ` files — layouts, a list+detail collection, pages, wasm
+hosts, SEO and RSS. Not importable and not wired into `Build`: you copy them in
+and they become your code. See [starter/README.md](starter/README.md). The
+reactive page and widgets live in astwerk-live's `starter/`.
 
 ## Non-goals
 

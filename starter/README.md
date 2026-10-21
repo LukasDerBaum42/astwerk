@@ -42,37 +42,17 @@ but the local build still fails until you delete them.
 | `pages/home.templ` | front page, near-empty on purpose |
 | `pages/about.templ` | a plain one-off page |
 | `pages/not_found.templ` | 404 page; see its comment for wiring `404.html` |
-| `pages/reactive.templ` | a page of `widgets/`, wrapped in `x.Document` |
-| `widgets/counter.templ` | counter with increment/reset, a toggle-`When` section and a title effect |
-| `widgets/todo.templ` | two-way input + keyed list, with the script escape hatch for add |
-| `widgets/price.templ` | computed value over two two-way number inputs |
 | `wasm/wasm_script.templ` | loads a `.wasm` build plus Go's `wasm_exec.js` glue |
 | `wasm/canvas_host.templ` | sized `<canvas>` paired with its script |
 | `meta/seo_head.templ` | description, Open Graph and Twitter tags |
 | `meta/rss_feed.templ` | RSS 2.0 feed over a `[]FeedItem` |
 
-## The reactive widgets
+## Reactive widgets
 
-`widgets/` uses `astwerk/x` — compiled reactive markup: the Go functions in the
-widgets render both the static HTML and the small JavaScript that makes it
-live, with no WASM and no framework. The x package is a real import
-(`github.com/LukasDerBaum42/astwerk/x`), so unlike the placeholder paths it
-needs no rewriting.
-
-Three rules to keep in mind:
-
-- **Wrap the page content in `x.Document`.** That is what emits the runtime and
-  state declarations before the markup and the bindings after it (see
-  `pages/reactive.templ`). Outside a Document the widgets still render — just
-  statically, which is what makes reactivity opt-in.
-- **Name anything a script reads.** `x.NamedNumSignal("count", 0)` keeps that name in
-  the generated JavaScript, so `<script>` bodies and `x.Effect` blocks can read
-  the signal directly (`count.get()`). Auto-named signals (s0, s1…) are fine
-  for bindings, which never need to know the name.
-- **The script is the escape hatch.** Combinators cover increment, toggle,
-  reset and arithmetic; anything more — appending to a list, validation,
-  fetch — is a `<script>` reading the named signals (see
-  `widgets/todo.templ`), never a new combinator.
+The x-based page and widgets (`pages/reactive.templ`, `widgets/`) moved to
+[astwerk-live](https://github.com/LukasDerBaum42/astwerk-live), the opt-in
+client-side extension. Copy them from `starter/` there on top of this starter
+when you want the reactive demo; this folder stays core-only.
 
 ## Why these shapes
 
