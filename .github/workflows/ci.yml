@@ -29,8 +29,8 @@ jobs:
             echo "not gofmt'd:"; echo "$unformatted"; exit 1
           fi
 
-      # ssg, content and devserver run on the host. -race because Build and
-      # CompileScripts fan work out across goroutines and devserver has a
+      # ssg, content, assets and devserver run on the host. -race because Build
+      # and CompileScripts fan work out across goroutines and devserver has a
       # watcher, a server and a subscriber set running at once.
       - name: Test (host)
-        run: go test -race ./ssg/ ./content/ ./devserver/
+        run: go test -race ./ssg/ ./content/ ./assets/ ./devserver/

@@ -1,13 +1,18 @@
-// Package content reads markdown files with TOML front matter.
+// Package content reads markdown files with TOML or JSON front matter.
 //
 // Front matter is kept as a generic map rather than a fixed struct, so each
 // project decodes it into whatever struct its own layouts need via [Decode].
 // [LoadCollection] and [LoadCollectionTree] decode a whole directory into a
 // typed [Collection] in one call.
+//
+// A page's body is rendered by [Page.Render], which needs the page's ssg.Ctx:
+// that is where root-relative URLs are rewritten and registered templ
+// components ({{@name(...)}}) are called.
 package content
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -17,25 +22,42 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/LukasDerBaum42/astwerk/ssg"
+	"github.com/a-h/templ"
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/text"
 )
 
 // Delimiter marks the start and end of a front matter block.
 const Delimiter = "+++"
 
+type frontMatterFormat uint8
+
+const (
+	frontMatterTOML frontMatterFormat = iota
+	frontMatterJSON
+)
+
 // Page is one parsed markdown file.
 type Page struct {
-	// Meta is the TOML front matter found between +++ markers, or nil if the
-	// file had none.
+	// Meta is the front matter found between +++ markers, or nil if the file
+	// had none. A block whose first non-space character is { is JSON; anything
+	// else is TOML.
 	Meta map[string]any
-
-	// HTML is the markdown body rendered to HTML.
-	HTML string
 
 	// raw is the front matter source, kept so Decode can unmarshal it directly
 	// instead of round-tripping through Meta.
-	raw string
+	raw    string
+	format frontMatterFormat
+
+	loader     *Loader
+	source     []byte
+	doc        ast.Node
+	html       string
+	nonce      string
+	components []func(ssg.Ctx) templ.Component
 }
 
 // DefaultMarkdown renders with raw HTML passed through, so a page can drop into
@@ -57,7 +79,8 @@ func DefaultMarkdown() goldmark.Markdown {
 //	)
 //	pages, err := content.NewLoader(md).LoadDir("content/docs")
 type Loader struct {
-	markdown goldmark.Markdown
+	markdown   goldmark.Markdown
+	components *Components
 }
 
 // NewLoader returns a Loader using md. A nil md means [DefaultMarkdown].
@@ -65,6 +88,7 @@ func NewLoader(md goldmark.Markdown) *Loader {
 	if md == nil {
 		md = DefaultMarkdown()
 	}
+	installComponentSupport(md)
 	return &Loader{markdown: md}
 }
 
@@ -100,20 +124,36 @@ func (l *Loader) Load(path string) (Page, error) {
 // Parse does Load's work on an in-memory document.
 func (l *Loader) Parse(src string) (Page, error) {
 	raw, body := splitFrontMatter(src)
-
-	var meta map[string]any
+	p := Page{raw: raw, format: frontMatterTOML, loader: l, source: []byte(body)}
 	if raw != "" {
-		if _, err := toml.Decode(raw, &meta); err != nil {
-			return Page{}, fmt.Errorf("front matter: %w", err)
+		p.format = detectFrontMatterFormat(raw)
+		if p.format == frontMatterJSON {
+			var meta map[string]any
+			if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+				return Page{}, fmt.Errorf("front matter (json): %w", err)
+			}
+			p.Meta = meta
+		} else {
+			var meta map[string]any
+			if _, err := toml.Decode(raw, &meta); err != nil {
+				return Page{}, fmt.Errorf("front matter: %w", err)
+			}
+			p.Meta = meta
 		}
 	}
 
-	var buf bytes.Buffer
-	if err := l.markdown.Convert([]byte(body), &buf); err != nil {
-		return Page{}, fmt.Errorf("markdown: %w", err)
+	p.doc = l.markdown.Parser().Parse(text.NewReader(p.source))
+	if err := p.prepare(); err != nil {
+		return Page{}, err
 	}
+	return p, nil
+}
 
-	return Page{Meta: meta, HTML: buf.String(), raw: raw}, nil
+func detectFrontMatterFormat(raw string) frontMatterFormat {
+	if strings.HasPrefix(strings.TrimSpace(raw), "{") {
+		return frontMatterJSON
+	}
+	return frontMatterTOML
 }
 
 // LoadDir reads every *.md file directly inside dir (non-recursive) and returns
@@ -212,6 +252,10 @@ func Slugs(pages map[string]Page) []string {
 func Decode[T any](p Page) (T, error) {
 	var out T
 	if p.raw != "" {
+		if p.format == frontMatterJSON {
+			err := json.Unmarshal([]byte(p.raw), &out)
+			return out, err
+		}
 		_, err := toml.Decode(p.raw, &out)
 		return out, err
 	}

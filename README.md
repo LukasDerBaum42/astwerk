@@ -27,8 +27,9 @@ repository so its dependencies stay out of this module.
 All of §2–§7 is implemented, plus §11.1–§11.3 of the follow-up list.
 
 ```
-ssg/        Node, Build, BuildLocales, CompileScripts
-content/    Load, LoadDir, LoadTree, Decode, Slugs, Chunk
+ssg/        Node, Build, BuildLocales, CompileScripts, URLs, Sitemap
+content/    Load, LoadDir, LoadTree, Decode, Slugs, Chunk, Page.Render, components
+assets/     sidecar metadata (meta.json / meta.toml) for asset directories
 devserver/  watch, rebuild, live reload
 starter/    13 copyable .templ files — see starter/README.md
 ```
@@ -198,13 +199,14 @@ built by its own `go build` process, so there's nothing of yours to race.
 
 ---
 
-## `content` — markdown with TOML front matter
+## `content` — markdown with TOML or JSON front matter
 
 ```go
 type Page struct {
 	Meta map[string]any // front matter between +++ markers
-	HTML string         // rendered markdown body
 }
+
+func (p Page) Render(ctx ssg.Ctx) templ.Component // body, with components and URLs resolved
 
 func Load(path string) (Page, error)
 func Parse(src string) (Page, error)
@@ -216,8 +218,20 @@ func Chunk[T any](items []T, size int) [][]T       // for paging a long collecti
 ```
 
 Front matter stays a generic map so each project decodes it into whatever
-struct its own layouts need. Markdown renders through goldmark with raw HTML
-passed through, so a page can drop into hand-written markup.
+struct its own layouts need. A `+++` block whose first non-space character is
+`{` is JSON; otherwise it is TOML. Markdown renders through goldmark with raw
+HTML passed through, so a page can drop into hand-written markup.
+
+Render the body with the page's `ssg.Ctx`. That is what makes root-relative
+URLs (`/img/x.png`, `/about/`) work from any page under `RelativeURLs`, and it
+is where markdown components run:
+
+```md
+A note: {{@callout(kind="warning", text="Careful")}}
+```
+
+Register components on a loader (`content.NewLoader(nil).WithComponents(cs)`);
+see `content.Components` and `content.Register`.
 
 Combined with `Generate`, that's a collection — one index page plus one page
 per file, with no path arithmetic anywhere:
@@ -240,12 +254,11 @@ func projects(dir string) ssg.Node {
 	// Slugs, not a map range: map order would reshuffle the index every build.
 	for _, slug := range content.Slugs(pages) {
 		fm, _ := content.Decode[FrontMatter](pages[slug])
-		body := pages[slug].HTML
 
 		children[slug] = ssg.Node{
 			Title: fm.Title,
 			Page: func(c ssg.Ctx) templ.Component {
-				return src.ProjectPage(c.Title, c.Path, c.Prefix, body)
+				return src.ProjectPage(c.Title, c.Path, c.Prefix, pages[slug].Render(c))
 			},
 		}
 		tiles = append(tiles, src.ProjectTile(fm.Title, fm.Description, slug))
@@ -256,7 +269,6 @@ func projects(dir string) ssg.Node {
 		Page:     func(c ssg.Ctx) templ.Component { return src.Project(c.Title, c.Path, c.Prefix, tiles) },
 		Children: children,
 	}
-}
 ```
 
 Use it as `"projects": projects("content/projects")`.
@@ -266,6 +278,46 @@ Use it as `"projects": projects("content/projects")`.
 contain slashes, so those keys nest on their own. `Chunk` splits a slice into
 groups of at most `size` for a paginated index — the arithmetic only, since
 turning groups into nodes is three lines and every site wants them differently.
+
+---
+
+## `assets` — sidecar metadata for asset directories
+
+A directory of images, audio or video often needs licence and credit data.
+`assets` scans a tree and pairs each regular file with an entry from a
+`meta.json` or `meta.toml` in the same directory:
+
+```go
+type Media struct {
+	Credit  string `json:"credit" toml:"credit"`
+	License string `json:"license" toml:"license"`
+}
+
+entries, err := assets.LoadTree[Media]("public/img", assets.Options[Media]{
+	Include: []string{"*.png", "*.jpg", "*.webp"},
+})
+
+for _, e := range entries {
+	// e.File.Path, e.Meta.Credit, e.Meta.License
+}
+```
+
+- `LoadTree` is recursive; `LoadDir` reads one directory.
+- The sidecar is a map from file name to metadata; the sidecar files are not
+  returned as entries.
+- Files without an entry are included with the zero `T` and `HasMeta == false`;
+  `RequireMeta` drops them.
+- `Options` also covers a custom sidecar name, include/exclude globs and skipped
+  directories.
+
+Two seams keep it adaptable: `Options.Sidecar` replaces the sidecar lookup
+(per-directory metadata, inheritance, a different file, a remote source), and
+`assets.Walk` yields directories and files with no metadata logic at all.
+`assets.ReadSidecar` and `assets.MetaSidecar` are the built-in decoder and
+lookup, exposed for reuse. See `design/assets.md` for examples.
+
+`CopyFrom` copies the sidecar along with the assets. Keep a sidecar outside
+the copied directory, or exclude it, if it should not be published.
 
 ---
 

@@ -61,9 +61,18 @@ func TestLoadCollection(t *testing.T) {
 	if want := (post{Title: "Dice Dungeon", Order: 1}); !reflect.DeepEqual(col.Items[0].Meta, want) {
 		t.Errorf("Meta = %+v, want %+v", col.Items[0].Meta, want)
 	}
-	if got := col.Items[1].HTML; !strings.Contains(got, "body a") {
+	if got := renderComponent(t, col.Items[1].Content(ssg.Ctx{})); !strings.Contains(got, "body a") {
 		t.Errorf("HTML = %q", got)
 	}
+}
+
+func renderComponent(t *testing.T, c templ.Component) string {
+	t.Helper()
+	var sb strings.Builder
+	if err := c.Render(context.Background(), &sb); err != nil {
+		t.Fatal(err)
+	}
+	return sb.String()
 }
 
 func TestLoadCollectionTree(t *testing.T) {
@@ -94,6 +103,27 @@ func TestLoadCollectionReportsDecodeError(t *testing.T) {
 	dir := writeCollection(t, map[string]string{"bad.md": "+++\nTitle = 42\n+++\nbody\n"})
 	if _, err := LoadCollection[post](dir); err == nil {
 		t.Fatal("expected the front matter type error to propagate")
+	}
+}
+
+func TestLoadCollectionMixedFrontMatter(t *testing.T) {
+	dir := writeCollection(t, map[string]string{
+		"json.md": "+++\n{\"Title\": \"JSON\", \"Order\": 2}\n+++\njson body\n",
+		"toml.md": "+++\nTitle = \"TOML\"\nOrder = 1\n+++\ntoml body\n",
+	})
+
+	col, err := LoadCollection[post](dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := slugsOf(col); !reflect.DeepEqual(got, []string{"json", "toml"}) {
+		t.Fatalf("slugs = %v", got)
+	}
+	if col.Items[0].Meta != (post{Title: "JSON", Order: 2}) {
+		t.Errorf("json Meta = %+v", col.Items[0].Meta)
+	}
+	if col.Items[1].Meta != (post{Title: "TOML", Order: 1}) {
+		t.Errorf("toml Meta = %+v", col.Items[1].Meta)
 	}
 }
 

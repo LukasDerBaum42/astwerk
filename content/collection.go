@@ -10,7 +10,9 @@ import (
 )
 
 // Item is one entry in a [Collection]: a page's slug, its front matter decoded
-// into T, and its rendered HTML.
+// into T, and the page body. Call [Item.Content] with the page's ssg.Ctx to
+// render the body; that is where markdown components run and root-relative
+// URLs are resolved.
 type Item[T any] struct {
 	// Slug is the page's key: the file name without the extension for
 	// [LoadCollection], or the path relative to the root directory for
@@ -21,9 +23,12 @@ type Item[T any] struct {
 	// yields the zero value of T.
 	Meta T
 
-	// HTML is the markdown body rendered to HTML.
-	HTML string
+	page Page
 }
+
+// Content renders the page body. Pass the page's ssg.Ctx so relative URLs and
+// markdown components resolve against the page that shows them.
+func (it Item[T]) Content(ctx ssg.Ctx) templ.Component { return it.page.Render(ctx) }
 
 // Collection is a loaded set of pages as a slice, built by calling
 // [LoadCollection] or [LoadCollectionTree] — never by convention, never by
@@ -84,7 +89,7 @@ func collectionFrom[T any](pages map[string]Page) (Collection[T], error) {
 		if err != nil {
 			return Collection[T]{}, fmt.Errorf("content: %s: %w", slug, err)
 		}
-		items = append(items, Item[T]{Slug: slug, Meta: meta, HTML: p.HTML})
+		items = append(items, Item[T]{Slug: slug, Meta: meta, page: p})
 	}
 	return Collection[T]{Items: items}, nil
 }

@@ -1,11 +1,14 @@
 package content
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/LukasDerBaum42/astwerk/ssg"
 )
 
 type frontMatter struct {
@@ -36,14 +39,15 @@ func TestParseSplitsFrontMatterAndBody(t *testing.T) {
 	if p.Meta["Title"] != "Dice Dungeon" {
 		t.Errorf("Meta[Title] = %v", p.Meta["Title"])
 	}
-	if !strings.Contains(p.HTML, "<h1>Heading</h1>") {
-		t.Errorf("HTML missing rendered heading:\n%s", p.HTML)
+	html := rendered(t, p)
+	if !strings.Contains(html, "<h1>Heading</h1>") {
+		t.Errorf("HTML missing rendered heading:\n%s", html)
 	}
-	if !strings.Contains(p.HTML, "<em>markdown</em>") {
-		t.Errorf("HTML missing emphasis:\n%s", p.HTML)
+	if !strings.Contains(html, "<em>markdown</em>") {
+		t.Errorf("HTML missing emphasis:\n%s", html)
 	}
-	if strings.Contains(p.HTML, "+++") {
-		t.Errorf("front matter leaked into HTML:\n%s", p.HTML)
+	if strings.Contains(html, "+++") {
+		t.Errorf("front matter leaked into HTML:\n%s", html)
 	}
 }
 
@@ -52,8 +56,8 @@ func TestParseKeepsRawHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(p.HTML, `<span class="raw">inline HTML</span>`) {
-		t.Errorf("raw HTML was escaped:\n%s", p.HTML)
+	if html := rendered(t, p); !strings.Contains(html, `<span class="raw">inline HTML</span>`) {
+		t.Errorf("raw HTML was escaped:\n%s", html)
 	}
 }
 
@@ -65,8 +69,8 @@ func TestParseWithoutFrontMatter(t *testing.T) {
 	if p.Meta != nil {
 		t.Errorf("Meta = %v, want nil", p.Meta)
 	}
-	if !strings.Contains(p.HTML, "<em>text</em>") {
-		t.Errorf("HTML = %q", p.HTML)
+	if html := rendered(t, p); !strings.Contains(html, "<em>text</em>") {
+		t.Errorf("HTML = %q", html)
 	}
 }
 
@@ -78,14 +82,58 @@ func TestParseUnterminatedFrontMatterIsBody(t *testing.T) {
 	if p.Meta != nil {
 		t.Errorf("Meta = %v, want nil", p.Meta)
 	}
-	if !strings.Contains(p.HTML, "body text") {
-		t.Errorf("body was dropped: %q", p.HTML)
+	if html := rendered(t, p); !strings.Contains(html, "body text") {
+		t.Errorf("body was dropped: %q", html)
 	}
 }
 
 func TestParseInvalidTOML(t *testing.T) {
 	if _, err := Parse("+++\nthis is not toml\n+++\nbody\n"); err == nil {
 		t.Fatal("expected an error for malformed front matter")
+	}
+}
+
+const jsonSample = `+++
+{
+  "Title": "JSON Page",
+  "Description": "From JSON",
+  "Tags": ["a", "b"],
+  "Draft": true
+}
++++
+
+# JSON heading
+
+Some *json* markdown.
+`
+
+func TestParseJSONFrontMatter(t *testing.T) {
+	p, err := Parse(jsonSample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Meta["Title"] != "JSON Page" {
+		t.Errorf("Meta[Title] = %v", p.Meta["Title"])
+	}
+	fm, err := Decode[frontMatter](p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm.Title != "JSON Page" || fm.Description != "From JSON" || !fm.Draft {
+		t.Errorf("fm = %+v", fm)
+	}
+	if len(fm.Tags) != 2 || fm.Tags[0] != "a" {
+		t.Errorf("fm.Tags = %v", fm.Tags)
+	}
+	html := rendered(t, p)
+	if !strings.Contains(html, "<h1>JSON heading</h1>") || !strings.Contains(html, "<em>json</em>") {
+		t.Errorf("HTML = %q", html)
+	}
+}
+
+func TestParseInvalidJSONFrontMatter(t *testing.T) {
+	if _, err := Parse("+++\n{ nope }\n+++\nbody\n"); err == nil {
+		t.Fatal("expected an error for malformed JSON front matter")
 	}
 }
 
@@ -254,6 +302,15 @@ func keys(m map[string]Page) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func rendered(t *testing.T, p Page) string {
+	t.Helper()
+	var b strings.Builder
+	if err := p.Render(ssg.Ctx{}).Render(context.Background(), &b); err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
 }
 
 func TestSlugsAreSorted(t *testing.T) {
