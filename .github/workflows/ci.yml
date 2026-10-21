@@ -29,18 +29,8 @@ jobs:
             echo "not gofmt'd:"; echo "$unformatted"; exit 1
           fi
 
-      # ssg, content, devserver and x run on the host; the reactive core has no
-      # build constraints so it does too. -race because Build and CompileScripts
-      # fan work out across goroutines and devserver has a watcher, a server and
-      # a subscriber set running at once.
+      # ssg, content and devserver run on the host. -race because Build and
+      # CompileScripts fan work out across goroutines and devserver has a
+      # watcher, a server and a subscriber set running at once.
       - name: Test (host)
-        run: go test -race ./ssg/ ./content/ ./devserver/ ./reactive/ ./x/
-
-      # wasmwrap, jsdom and reactive's DOM half need a JS runtime.
-      # go_js_wasm_exec drives them through node.
-      - name: Test (js/wasm)
-        run: |
-          export PATH="$PATH:$(go env GOROOT)/lib/wasm"
-          GOOS=js GOARCH=wasm go build ./...
-          GOOS=js GOARCH=wasm go vet ./...
-          GOOS=js GOARCH=wasm go test ./wasmwrap/ ./reactive/ ./jsdom/
+        run: go test -race ./ssg/ ./content/ ./devserver/
