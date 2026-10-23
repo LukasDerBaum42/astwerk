@@ -40,6 +40,24 @@ type Ctx struct {
 	// instead of absolute ones, from [BuildOptions.RelativeURLs]. [Ctx.URL] is
 	// unaffected and stays absolute.
 	Relative bool
+
+	// Data is application data for this subtree, from [Node.Data]. The framework
+	// never reads it; use [DataOf] to get it back with the type you stored.
+	Data any
+
+	// Item is the content item being rendered, when the page comes from a
+	// content collection. The framework never reads it; content.ItemOf gets it
+	// back with the item's type.
+	Item any
+}
+
+// DataOf returns the application data stored on the page's node, if it has the
+// requested type. Set it once with [Node.Data]; children inherit it.
+//
+//	data, ok := ssg.DataOf[SiteData](ctx)
+func DataOf[T any](c Ctx) (T, bool) {
+	value, ok := c.Data.(T)
+	return value, ok
 }
 
 // URL is this page's absolute URL, always base-prefixed and never relative:
@@ -156,6 +174,11 @@ func Static(fn func() templ.Component) PageFunc {
 type Node struct {
 	// Title is passed to Page and Files as Ctx.Title.
 	Title string
+
+	// Data is application data passed to pages in this subtree as Ctx.Data.
+	// Children inherit it unless they set their own non-nil Data. The framework
+	// never reads it; use [DataOf] to get it back with the type you stored.
+	Data any
 
 	// Page renders this directory's index.html.
 	Page PageFunc

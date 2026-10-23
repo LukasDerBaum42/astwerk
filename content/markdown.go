@@ -42,9 +42,99 @@ func NewComponents() *Components {
 	return &Components{byName: make(map[string]componentResolver)}
 }
 
-// Register binds name to a templ component. It panics on an empty or duplicate
-// name, which can only be a programming error at start-up.
+// Register binds name to a templ component taking one props value. It panics
+// on an empty or duplicate name, which can only be a programming error at
+// start-up. Props are decoded as JSON into T.
+//
+// For two or more positional arguments use [Register2], [Register3] or
+// [Register4].
 func Register[T any](cs *Components, name string, render func(ssg.Ctx, T) templ.Component) {
+	register(cs, name, func(args []byte) (func(ssg.Ctx) templ.Component, error) {
+		var props T
+		if len(bytes.TrimSpace(args)) > 0 {
+			if err := json.Unmarshal(args, &props); err != nil {
+				return nil, err
+			}
+		}
+		return func(ctx ssg.Ctx) templ.Component { return render(ctx, props) }, nil
+	})
+}
+
+// Register2 binds a component taking two positional arguments:
+//
+//	content.Register2(cs, "figure", func(ctx ssg.Ctx, src, caption string) templ.Component { ... })
+//
+// Markdown calls it as {{@figure("a.png", "Caption")}}. Named arguments are
+// not supported for arity 2+; use a props struct with [Register] instead.
+func Register2[A, B any](cs *Components, name string, render func(ssg.Ctx, A, B) templ.Component) {
+	register(cs, name, func(args []byte) (func(ssg.Ctx) templ.Component, error) {
+		values, err := positionalArgs(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		var a A
+		if err := json.Unmarshal(values[0], &a); err != nil {
+			return nil, fmt.Errorf("argument 1: %w", err)
+		}
+		var b B
+		if err := json.Unmarshal(values[1], &b); err != nil {
+			return nil, fmt.Errorf("argument 2: %w", err)
+		}
+		return func(ctx ssg.Ctx) templ.Component { return render(ctx, a, b) }, nil
+	})
+}
+
+// Register3 is [Register2] with three positional arguments.
+func Register3[A, B, C any](cs *Components, name string, render func(ssg.Ctx, A, B, C) templ.Component) {
+	register(cs, name, func(args []byte) (func(ssg.Ctx) templ.Component, error) {
+		values, err := positionalArgs(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		var a A
+		if err := json.Unmarshal(values[0], &a); err != nil {
+			return nil, fmt.Errorf("argument 1: %w", err)
+		}
+		var b B
+		if err := json.Unmarshal(values[1], &b); err != nil {
+			return nil, fmt.Errorf("argument 2: %w", err)
+		}
+		var c C
+		if err := json.Unmarshal(values[2], &c); err != nil {
+			return nil, fmt.Errorf("argument 3: %w", err)
+		}
+		return func(ctx ssg.Ctx) templ.Component { return render(ctx, a, b, c) }, nil
+	})
+}
+
+// Register4 is [Register2] with four positional arguments.
+func Register4[A, B, C, D any](cs *Components, name string, render func(ssg.Ctx, A, B, C, D) templ.Component) {
+	register(cs, name, func(args []byte) (func(ssg.Ctx) templ.Component, error) {
+		values, err := positionalArgs(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		var a A
+		if err := json.Unmarshal(values[0], &a); err != nil {
+			return nil, fmt.Errorf("argument 1: %w", err)
+		}
+		var b B
+		if err := json.Unmarshal(values[1], &b); err != nil {
+			return nil, fmt.Errorf("argument 2: %w", err)
+		}
+		var c C
+		if err := json.Unmarshal(values[2], &c); err != nil {
+			return nil, fmt.Errorf("argument 3: %w", err)
+		}
+		var d D
+		if err := json.Unmarshal(values[3], &d); err != nil {
+			return nil, fmt.Errorf("argument 4: %w", err)
+		}
+		return func(ctx ssg.Ctx) templ.Component { return render(ctx, a, b, c, d) }, nil
+	})
+}
+
+func register(cs *Components, name string, resolve componentResolver) {
 	if cs == nil {
 		panic("content: Register on a nil Components")
 	}
@@ -54,15 +144,22 @@ func Register[T any](cs *Components, name string, render func(ssg.Ctx, T) templ.
 	if _, exists := cs.byName[name]; exists {
 		panic(fmt.Sprintf("content: component %q registered twice", name))
 	}
-	cs.byName[name] = func(args []byte) (func(ssg.Ctx) templ.Component, error) {
-		var props T
-		if len(bytes.TrimSpace(args)) > 0 {
-			if err := json.Unmarshal(args, &props); err != nil {
-				return nil, err
-			}
-		}
-		return func(ctx ssg.Ctx) templ.Component { return render(ctx, props) }, nil
+	cs.byName[name] = resolve
+}
+
+// positionalArgs decodes a JSON array of exactly want values.
+func positionalArgs(args []byte, want int) ([]json.RawMessage, error) {
+	if len(bytes.TrimSpace(args)) == 0 {
+		return nil, fmt.Errorf("expected %d arguments, got 0", want)
 	}
+	var values []json.RawMessage
+	if err := json.Unmarshal(args, &values); err != nil {
+		return nil, fmt.Errorf("expected %d arguments (positional)", want)
+	}
+	if len(values) != want {
+		return nil, fmt.Errorf("expected %d arguments, got %d", want, len(values))
+	}
+	return values, nil
 }
 
 // WithComponents attaches a registry to the loader. Markdown loaded through
@@ -210,27 +307,80 @@ func validComponentName(name string) bool {
 }
 
 // componentArgs turns the call's argument text into a JSON value for the
-// props type: a JSON object, a single JSON literal, or key=value pairs.
+// resolver: an object for named args, a single value for one argument, or an
+// array for two or more positional arguments.
 func componentArgs(args string) ([]byte, error) {
+	args = strings.TrimSpace(args)
 	if args == "" {
 		return nil, nil
 	}
 	if json.Valid([]byte(args)) {
 		return []byte(args), nil
 	}
-	if strings.Contains(args, "=") {
-		return namedComponentArgs(args)
-	}
-	// A bare word is a string: {{@callout(note)}}.
-	b, err := json.Marshal(args)
-	return b, err
-}
 
-func namedComponentArgs(args string) ([]byte, error) {
 	parts, err := splitTopLevel(args, ',')
 	if err != nil {
 		return nil, err
 	}
+	if hasTopLevelEquals(parts[0]) {
+		return namedComponentArgs(parts)
+	}
+	if len(parts) == 1 {
+		return encodeComponentArg(parts[0])
+	}
+
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	for i, part := range parts {
+		value, err := encodeComponentArg(part)
+		if err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(value)
+	}
+	buf.WriteByte(']')
+	return buf.Bytes(), nil
+}
+
+// encodeComponentArg passes a JSON literal through and quotes a bare word as a
+// string, so callout(note) and callout("note") are the same.
+func encodeComponentArg(arg string) ([]byte, error) {
+	arg = strings.TrimSpace(arg)
+	if json.Valid([]byte(arg)) {
+		return []byte(arg), nil
+	}
+	return json.Marshal(arg)
+}
+
+func hasTopLevelEquals(s string) bool {
+	inString, escaped := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '=':
+			return true
+		}
+	}
+	return false
+}
+
+func namedComponentArgs(parts []string) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteByte('{')
 	for i, part := range parts {
@@ -248,13 +398,11 @@ func namedComponentArgs(args string) ([]byte, error) {
 		encKey, _ := json.Marshal(key)
 		buf.Write(encKey)
 		buf.WriteByte(':')
-		value = strings.TrimSpace(value)
-		if json.Valid([]byte(value)) {
-			buf.WriteString(value)
-		} else {
-			encValue, _ := json.Marshal(value)
-			buf.Write(encValue)
+		encValue, err := encodeComponentArg(value)
+		if err != nil {
+			return nil, err
 		}
+		buf.Write(encValue)
 	}
 	buf.WriteByte('}')
 	return buf.Bytes(), nil

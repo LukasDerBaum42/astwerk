@@ -55,7 +55,7 @@ func Build(root Node, opts BuildOptions) error {
 			return fmt.Errorf("ssg: pre: %w", err)
 		}
 	}
-	if err := buildNode(root, opts.OutDir, "", nil, opts, cs); err != nil {
+	if err := buildNode(root, opts.OutDir, "", nil, nil, opts, cs); err != nil {
 		return err
 	}
 	if opts.Post != nil {
@@ -70,9 +70,12 @@ func Build(root Node, opts BuildOptions) error {
 // relative to the site root ("" at the root, "de/about/" deeper down), and loc
 // the locale it was mounted under, if any. cs is the incremental changed set;
 // an empty cs means a full build.
-func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions, cs changedSet) error {
+func buildNode(n Node, dir, sitePath string, loc *localeCtx, data any, opts BuildOptions, cs changedSet) error {
 	if n.locale != nil {
 		loc = n.locale
+	}
+	if n.Data != nil {
+		data = n.Data
 	}
 
 	ctx := Ctx{
@@ -80,6 +83,7 @@ func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions, 
 		Path:     sitePath,
 		Base:     opts.normalizeBase(),
 		Relative: opts.RelativeURLs,
+		Data:     data,
 	}
 	if loc != nil {
 		ctx.Locale, ctx.Prefix = loc.code, loc.prefix
@@ -148,7 +152,7 @@ func buildNode(n Node, dir, sitePath string, loc *localeCtx, opts BuildOptions, 
 		if err != nil {
 			return fmt.Errorf("ssg: child %q of %s: %w", key, dir, err)
 		}
-		return buildNode(children[key], sub, joinPath(sitePath, key), loc, opts, cs)
+		return buildNode(children[key], sub, joinPath(sitePath, key), loc, data, opts, cs)
 	}
 
 	if !opts.Parallel {

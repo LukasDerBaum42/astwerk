@@ -28,7 +28,23 @@ type Item[T any] struct {
 
 // Content renders the page body. Pass the page's ssg.Ctx so relative URLs and
 // markdown components resolve against the page that shows them.
-func (it Item[T]) Content(ctx ssg.Ctx) templ.Component { return it.page.Render(ctx) }
+//
+// The item is placed on the context as ctx.Item, so a markdown component can
+// read it with [ItemOf] without the call passing the slug or front matter.
+func (it Item[T]) Content(ctx ssg.Ctx) templ.Component {
+	ctx.Item = it
+	return it.page.Render(ctx)
+}
+
+// ItemOf returns the content item being rendered, when the page came from a
+// collection. Components in that page's markdown can use it to reach the
+// current slug and front matter without props:
+//
+//	it, ok := content.ItemOf[Post](ctx)
+func ItemOf[T any](ctx ssg.Ctx) (Item[T], bool) {
+	item, ok := ctx.Item.(Item[T])
+	return item, ok
+}
 
 // Collection is a loaded set of pages as a slice, built by calling
 // [LoadCollection] or [LoadCollectionTree] — never by convention, never by
@@ -92,6 +108,57 @@ func collectionFrom[T any](pages map[string]Page) (Collection[T], error) {
 		items = append(items, Item[T]{Slug: slug, Meta: meta, page: p})
 	}
 	return Collection[T]{Items: items}, nil
+}
+
+// MustLoadCollection is [LoadCollection] for a package-level collection. It
+// panics on error, like [MustLoadData]:
+//
+//	var Posts = content.MustLoadCollectionTree[Post]("content/posts")
+func MustLoadCollection[T any](dir string) Collection[T] {
+	c, err := LoadCollection[T](dir)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// MustLoadCollectionTree is [LoadCollectionTree] for a package-level collection.
+func MustLoadCollectionTree[T any](dir string) Collection[T] {
+	c, err := LoadCollectionTree[T](dir)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// Len returns the number of items.
+func (c Collection[T]) Len() int { return len(c.Items) }
+
+// Each calls fn for every item in load order.
+func (c Collection[T]) Each(fn func(Item[T])) {
+	for _, item := range c.Items {
+		fn(item)
+	}
+}
+
+// First returns the first item, or false when the collection is empty.
+func (c Collection[T]) First() (Item[T], bool) {
+	if len(c.Items) == 0 {
+		var zero Item[T]
+		return zero, false
+	}
+	return c.Items[0], true
+}
+
+// Get returns the item with the given slug.
+func (c Collection[T]) Get(slug string) (Item[T], bool) {
+	for _, item := range c.Items {
+		if item.Slug == slug {
+			return item, true
+		}
+	}
+	var zero Item[T]
+	return zero, false
 }
 
 // Sort returns the collection ordered by less, leaving the original untouched.

@@ -96,6 +96,7 @@ Every field is optional. The zero value does nothing but recurse into
 | Field | Type | Effect at this node's directory |
 | --- | --- | --- |
 | `Title` | `string` | passed to pages as `Ctx.Title` |
+| `Data` | `any` | passed to pages as `Ctx.Data`, inherited by children |
 | `Page` | `PageFunc` | renders `index.html` |
 | `Files` | `map[string]PageFunc` | renders extra files by name (`404.html`, `rss.xml`, `feed/rss.xml`) |
 | `Generate` | `func() map[string]Node` | children computed at build time, merged into `Children`; generated keys win |
@@ -120,8 +121,11 @@ type Ctx struct {
 	Locale   string // "" or "de"
 	Base     string // "" or "/astwerk" — the site's base path
 	Relative bool   // in-page URLs are relative to this page
+	Data     any    // Node.Data for this subtree
+	Item     any    // the current content.Item, when rendering a collection page
 }
 
+func DataOf[T any](c Ctx) (T, bool)        // Ctx.Data with your type
 func (c Ctx) URL() string               // absolute: canonical tags, feeds
 func (c Ctx) Asset(path string) string  // an asset, from this page
 func (c Ctx) Link(path string) string   // a page, locale-aware
@@ -139,6 +143,19 @@ under a subpath with no rebuild:
 ssg.Build(root, ssg.BuildOptions{
 	RelativeURLs: true,
 	BaseURL:      "/astwerk", // only Ctx.URL uses this
+})
+```
+
+`Data` is a typed escape hatch: `ssg.DataOf[T](ctx)` returns it with the type
+you stored. Set it once on a subtree (`Node.Data`); children inherit it unless
+they override it. `Item.Content(ctx)` also puts the current collection item on
+the context, available through `content.ItemOf[T](ctx)`. Markdown components
+receive the same ctx, so they read either without props:
+
+```go
+content.Register(cs, "post_list", func(ctx ssg.Ctx, _ struct{}) templ.Component {
+	data, _ := ssg.DataOf[SiteData](ctx)
+	return widgets.PostList(ctx, data.Posts)
 })
 ```
 
@@ -215,6 +232,12 @@ func LoadTree(dir string) (map[string]Page, error) // recursive, keyed by "2024/
 func Slugs(pages map[string]Page) []string         // sorted keys
 func Decode[T any](p Page) (T, error)              // front matter into your struct
 func Chunk[T any](items []T, size int) [][]T       // for paging a long collection
+
+func MustLoadCollection[T any](dir string) Collection[T]      // panics; package-level value
+func MustLoadCollectionTree[T any](dir string) Collection[T]
+func LoadData[T any](path string) (T, error)                  // one .json/.toml file
+func MustLoadData[T any](path string) T
+func ParseData[T any](data []byte, format string) (T, error)
 ```
 
 Front matter stays a generic map so each project decodes it into whatever
@@ -231,7 +254,23 @@ A note: {{@callout(kind="warning", text="Careful")}}
 ```
 
 Register components on a loader (`content.NewLoader(nil).WithComponents(cs)`);
-see `content.Components` and `content.Register`.
+`content.Register` takes one props struct, and `Register2` / `Register3` /
+`Register4` take two to four positional arguments:
+
+```md
+{{@figure("img/a.png", "Caption")}}
+```
+
+For data that is not content, `LoadData` is the whole API. A typed package
+variable is the global-state pattern — loaded once, used from any template:
+
+```go
+var Site = content.MustLoadData[SiteConfig]("site.json")
+var Posts = content.MustLoadCollectionTree[Post]("content/posts")
+```
+
+`MustLoad*` panics at start-up; the non-`Must` loaders return an error.
+`Collection` also has `Len`, `Each`, `First` and `Get` for the common loops.
 
 Combined with `Generate`, that's a collection — one index page plus one page
 per file, with no path arithmetic anywhere:

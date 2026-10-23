@@ -170,6 +170,76 @@ func TestCollectionSortFilterChunk(t *testing.T) {
 	}
 }
 
+func TestCollectionHelpers(t *testing.T) {
+	col := Collection[post]{Items: []Item[post]{
+		{Slug: "a", Meta: post{Title: "A"}},
+		{Slug: "b", Meta: post{Title: "B"}},
+	}}
+
+	if got := col.Len(); got != 2 {
+		t.Errorf("Len = %d", got)
+	}
+	var slugs []string
+	col.Each(func(it Item[post]) { slugs = append(slugs, it.Slug) })
+	if !reflect.DeepEqual(slugs, []string{"a", "b"}) {
+		t.Errorf("Each order = %v", slugs)
+	}
+	first, ok := col.First()
+	if !ok || first.Slug != "a" {
+		t.Errorf("First = %+v, %v", first, ok)
+	}
+	got, ok := col.Get("b")
+	if !ok || got.Meta.Title != "B" {
+		t.Errorf("Get(b) = %+v, %v", got, ok)
+	}
+	if _, ok := col.Get("nope"); ok {
+		t.Error("Get(nope) should be false")
+	}
+
+	var empty Collection[post]
+	if empty.Len() != 0 {
+		t.Errorf("empty Len = %d", empty.Len())
+	}
+	if _, ok := empty.First(); ok {
+		t.Error("empty First should be false")
+	}
+}
+
+func TestItemOf(t *testing.T) {
+	cs := NewComponents()
+	Register(cs, "who", func(ctx ssg.Ctx, _ struct{}) templ.Component {
+		it, ok := ItemOf[post](ctx)
+		if !ok {
+			return templ.Raw("missing")
+		}
+		return templ.Raw(it.Slug + ":" + it.Meta.Title)
+	})
+	dir := writeCollection(t, map[string]string{
+		"a.md": "+++\nTitle = \"A\"\n+++\n{{@who()}}\n",
+	})
+	col, err := LoadCollectionWith[post](NewLoader(nil).WithComponents(cs), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := renderComponent(t, col.Items[0].Content(ssg.Ctx{})); !strings.Contains(got, "a:A") {
+		t.Errorf("content = %q", got)
+	}
+	if _, ok := ItemOf[post](ssg.Ctx{}); ok {
+		t.Error("ItemOf on a context without an item should be false")
+	}
+}
+
+func TestMustLoadCollection(t *testing.T) {
+	dir := writeCollection(t, map[string]string{
+		"a.md": "+++\nTitle = \"A\"\n+++\n",
+	})
+	col := MustLoadCollection[post](dir)
+	if col.Len() != 1 || col.Items[0].Meta.Title != "A" {
+		t.Errorf("collection = %+v", col)
+	}
+}
+
 func TestCollectionChunkEmpty(t *testing.T) {
 	var col Collection[post]
 	if got := col.Chunk(3); got != nil {

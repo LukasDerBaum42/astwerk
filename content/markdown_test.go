@@ -2,6 +2,7 @@ package content
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,6 +36,76 @@ func renderPage(t *testing.T, p Page, ctx ssg.Ctx) string {
 		t.Fatal(err)
 	}
 	return b.String()
+}
+
+func TestComponentTwoArgs(t *testing.T) {
+	cs := NewComponents()
+	Register2(cs, "figure", func(_ ssg.Ctx, src, caption string) templ.Component {
+		return templ.Raw("<figure>" + src + "|" + caption + "</figure>")
+	})
+	l := NewLoader(nil).WithComponents(cs)
+
+	p, err := l.Parse(`{{@figure("a.png", "Caption")}}` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := renderPage(t, p, ssg.Ctx{}); !strings.Contains(got, "<figure>a.png|Caption</figure>") {
+		t.Errorf("output = %q", got)
+	}
+}
+
+func TestComponentTwoArgsBareWordAndNumber(t *testing.T) {
+	cs := NewComponents()
+	Register2(cs, "pair", func(_ ssg.Ctx, name string, n int) templ.Component {
+		return templ.Raw("<span>" + name + ":" + strconv.Itoa(n) + "</span>")
+	})
+	l := NewLoader(nil).WithComponents(cs)
+
+	p, err := l.Parse(`{{@pair(hello, 5)}}` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := renderPage(t, p, ssg.Ctx{}); !strings.Contains(got, "<span>hello:5</span>") {
+		t.Errorf("output = %q", got)
+	}
+}
+
+func TestComponentTwoArgsWrongCount(t *testing.T) {
+	cs := NewComponents()
+	Register2(cs, "pair", func(_ ssg.Ctx, a, b string) templ.Component { return templ.Raw("") })
+	l := NewLoader(nil).WithComponents(cs)
+
+	_, err := l.Parse(`{{@pair(only-one)}}` + "\n")
+	if err == nil || !strings.Contains(err.Error(), "expected 2 arguments") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestComponentSingleArgWithComma(t *testing.T) {
+	l := NewLoader(nil).WithComponents(testComponents())
+	p, err := l.Parse(`{{@note("a, b")}}` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := renderPage(t, p, ssg.Ctx{}); !strings.Contains(got, "note: a, b") {
+		t.Errorf("output = %q", got)
+	}
+}
+
+func TestComponentThreeArgs(t *testing.T) {
+	cs := NewComponents()
+	Register3(cs, "triple", func(_ ssg.Ctx, a string, b int, c bool) templ.Component {
+		return templ.Raw("<span>" + a + ":" + strconv.Itoa(b) + ":" + strconv.FormatBool(c) + "</span>")
+	})
+	l := NewLoader(nil).WithComponents(cs)
+
+	p, err := l.Parse(`{{@triple(x, 2, true)}}` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := renderPage(t, p, ssg.Ctx{}); !strings.Contains(got, "<span>x:2:true</span>") {
+		t.Errorf("output = %q", got)
+	}
 }
 
 func TestComponentInline(t *testing.T) {

@@ -92,6 +92,7 @@ func BuildLocales(base Node, locales []Locale) Node {
 func derive(n Node) (Node, bool) {
 	out := Node{
 		Title:    n.Title,
+		Data:     n.Data,
 		Page:     n.Page,
 		Generate: n.Generate,
 	}
