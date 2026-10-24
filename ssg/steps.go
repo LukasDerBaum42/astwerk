@@ -19,7 +19,7 @@ import (
 // code, so a build that calls page functions in-process silently keeps
 // rendering the versions compiled into the running binary.
 //
-//	Build: ssg.Command("go", "run", ".", "--out", "build", "--dev")
+//	Build: ssg.Command("go", "run", ".", "--out", "build")
 func Command(name string, args ...string) func() error {
 	return func() error {
 		label := strings.Join(append([]string{name}, args...), " ")
@@ -48,7 +48,7 @@ func Command(name string, args ...string) func() error {
 //
 //	Build: ssg.Steps(
 //		ssg.Command("templ", "generate"),
-//		ssg.Command("go", "run", ".", "--out", "build", "--dev"),
+//		ssg.Command("go", "run", ".", "--out", "build"),
 //	)
 //
 // A nil step is skipped, so a step can be switched off by a flag without

@@ -169,6 +169,37 @@ func (l *Loader) WithComponents(cs *Components) *Loader {
 	return l
 }
 
+// RenderOptions configures markdown post-processing. The zero value leaves the
+// rendered HTML alone.
+type RenderOptions struct {
+	// ExternalLinkTarget, when non-empty, adds target to links whose href is an
+	// absolute http(s) or protocol-relative URL. For "_blank" it also adds
+	// rel="noopener noreferrer" unless the tag already has a rel.
+	ExternalLinkTarget string
+}
+
+// RenderOption configures a [Loader]'s markdown rendering.
+type RenderOption func(*RenderOptions)
+
+// WithExternalLinks makes links to another origin open with target (usually
+// "_blank"). It applies at render time, so it covers markdown links and raw
+// HTML alike and never touches code blocks.
+//
+//	l := content.NewLoader(nil).WithRenderOptions(content.WithExternalLinks("_blank"))
+func WithExternalLinks(target string) RenderOption {
+	return func(o *RenderOptions) { o.ExternalLinkTarget = target }
+}
+
+// WithRenderOptions applies markdown render options to this loader.
+func (l *Loader) WithRenderOptions(opts ...RenderOption) *Loader {
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&l.render)
+		}
+	}
+	return l
+}
+
 // installComponentSupport adds the inline parser and node renderer to md.
 func installComponentSupport(md goldmark.Markdown) {
 	md.Parser().AddOptions(parser.WithInlineParsers(
@@ -561,15 +592,22 @@ func (p Page) Render(ctx ssg.Ctx) templ.Component {
 		if p.html == "" {
 			return nil
 		}
+		options := RenderOptions{}
+		if p.loader != nil {
+			options = p.loader.render
+		}
+		write := func(s string) error {
+			_, err := io.WriteString(w, externalizeLinks(rewriteRootURLs(s, ctx), options))
+			return err
+		}
 		rest := p.html
 		for i := 0; ; i++ {
 			marker := fmt.Sprintf("<!--%s:c:%d-->", p.nonce, i)
 			at := strings.Index(rest, marker)
 			if at < 0 {
-				_, err := io.WriteString(w, rewriteRootURLs(rest, ctx))
-				return err
+				return write(rest)
 			}
-			if _, err := io.WriteString(w, rewriteRootURLs(rest[:at], ctx)); err != nil {
+			if err := write(rest[:at]); err != nil {
 				return err
 			}
 			if err := p.components[i](ctx).Render(context.Background(), w); err != nil {
@@ -581,6 +619,8 @@ func (p Page) Render(ctx ssg.Ctx) templ.Component {
 }
 
 var rootURLPattern = regexp.MustCompile(`(?i)\b(src|href|poster)="/([^"]*)"`)
+
+var anchorPattern = regexp.MustCompile(`(?i)<a\b[^>]*>`)
 
 // rewriteRootURLs rewrites root-relative URLs in rendered markdown to the URL
 // form the page needs: base-prefixed, or relative to the page's depth when
@@ -599,6 +639,29 @@ func rewriteRootURLs(s string, ctx ssg.Ctx) string {
 			return match
 		}
 		return parts[1] + `="` + html.EscapeString(ctx.Asset(path)) + `"`
+	})
+}
+
+// externalizeLinks adds target (and rel for _blank) to links to another origin.
+// It runs on rendered markdown chunks, so code blocks are already escaped and
+// component output is not touched.
+func externalizeLinks(s string, opts RenderOptions) string {
+	if opts.ExternalLinkTarget == "" {
+		return s
+	}
+	return anchorPattern.ReplaceAllStringFunc(s, func(tag string) string {
+		lower := strings.ToLower(tag)
+		if !strings.Contains(lower, `href="http`) && !strings.Contains(lower, `href="//`) {
+			return tag
+		}
+		if strings.Contains(lower, "target=") {
+			return tag
+		}
+		rel := ""
+		if opts.ExternalLinkTarget == "_blank" && !strings.Contains(lower, "rel=") {
+			rel = ` rel="noopener noreferrer"`
+		}
+		return strings.TrimSuffix(tag, ">") + ` target="` + opts.ExternalLinkTarget + `"` + rel + ">"
 	})
 }
 

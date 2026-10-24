@@ -131,6 +131,26 @@ func MustLoadCollectionTree[T any](dir string) Collection[T] {
 	return c
 }
 
+// MustLoadCollectionWith is [LoadCollectionWith] for a package-level collection
+// using a custom loader.
+func MustLoadCollectionWith[T any](l *Loader, dir string) Collection[T] {
+	c, err := LoadCollectionWith[T](l, dir)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// MustLoadCollectionTreeWith is [LoadCollectionTreeWith] for a package-level
+// collection using a custom loader.
+func MustLoadCollectionTreeWith[T any](l *Loader, dir string) Collection[T] {
+	c, err := LoadCollectionTreeWith[T](l, dir)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // Len returns the number of items.
 func (c Collection[T]) Len() int { return len(c.Items) }
 
@@ -185,25 +205,53 @@ func (c Collection[T]) Filter(keep func(Item[T]) bool) Collection[T] {
 // list of posts. See [Chunk] for the grouping semantics.
 func (c Collection[T]) Chunk(size int) [][]Item[T] { return Chunk(c.Items, size) }
 
-// Nodes turns the collection into one [ssg.Node] per item, keyed by slug, for
-// use as a [ssg.Node.Generate] result:
+// NodeOptions configures [Collection.NodesWith]. Page is required; Title and
+// DependsOn are optional — leave them nil to keep the node's title empty and
+// its dependencies unset.
+type NodeOptions[T any] struct {
+	// Page renders one item. Required.
+	Page func(ssg.Ctx, Item[T]) templ.Component
+
+	// Title sets Node.Title from the item. Nil leaves it empty, as [Nodes] does.
+	Title func(Item[T]) string
+
+	// DependsOn sets Node.DependsOn from the item, for incremental builds.
+	DependsOn func(Item[T]) []string
+}
+
+// NodesWith turns the collection into one [ssg.Node] per item, keyed by slug,
+// with optional title and dependency functions. It is [Nodes] with the two
+// fields a content-backed node usually needs.
 //
 //	"blog": {Generate: func() map[string]ssg.Node {
-//		return posts.Nodes(func(c ssg.Ctx, it content.Item[Post]) templ.Component {
-//			return src.PostPage(c, it)
+//		return posts.NodesWith(content.NodeOptions[Post]{
+//			Page:  func(c ssg.Ctx, it content.Item[Post]) templ.Component { return src.PostPage(c, it) },
+//			Title: func(it content.Item[Post]) string { return it.Meta.Title },
+//			DependsOn: func(it content.Item[Post]) []string { return []string{"content/posts"} },
 //		})
 //	}},
-//
-// Slugs with slashes nest, exactly as [LoadTree] keys do. Node.Title is left
-// empty: the page function receives the item, so it reads the title — and
-// anything else — from the item's Meta. A slug with a slash still nests, and
-// one odd item can still be built by hand and merged into the result map.
-func (c Collection[T]) Nodes(page func(ssg.Ctx, Item[T]) templ.Component) map[string]ssg.Node {
+func (c Collection[T]) NodesWith(opts NodeOptions[T]) map[string]ssg.Node {
+	if opts.Page == nil {
+		panic("content: NodesWith requires a Page function")
+	}
 	out := make(map[string]ssg.Node, len(c.Items))
 	for _, item := range c.Items {
-		out[item.Slug] = ssg.Node{
-			Page: func(ctx ssg.Ctx) templ.Component { return page(ctx, item) },
+		node := ssg.Node{
+			Page: func(ctx ssg.Ctx) templ.Component { return opts.Page(ctx, item) },
 		}
+		if opts.Title != nil {
+			node.Title = opts.Title(item)
+		}
+		if opts.DependsOn != nil {
+			node.DependsOn = opts.DependsOn(item)
+		}
+		out[item.Slug] = node
 	}
 	return out
+}
+
+// Nodes is [NodesWith] with only a page function: titles stay empty and no
+// dependencies are declared.
+func (c Collection[T]) Nodes(page func(ssg.Ctx, Item[T]) templ.Component) map[string]ssg.Node {
+	return c.NodesWith(NodeOptions[T]{Page: page})
 }

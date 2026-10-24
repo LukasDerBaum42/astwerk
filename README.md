@@ -58,15 +58,12 @@ package main
 
 import (
 	"log"
-	"os"
 
 	"github.com/LukasDerBaum42/astwerk/ssg"
 	"myproject/src"
 )
 
 func main() {
-	dev := len(os.Args) > 1 && os.Args[1] == "--dev"
-
 	root := ssg.Node{
 		Title: "My Site",
 		Page:  ssg.Templ(src.HomePage),
@@ -77,7 +74,7 @@ func main() {
 		},
 	}
 
-	if err := ssg.Build(root, ssg.BuildOptions{Dev: dev, RelativeURLs: true}); err != nil {
+	if err := ssg.Build(root, ssg.BuildOptions{RelativeURLs: true}); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -196,15 +193,12 @@ Page: func(c ssg.Ctx) templ.Component {
 ```go
 ssg.BuildOptions{
 	OutDir:       "build", // default
-	Dev:          false,   // mirrors the usual --dev flag
 	BaseURL:      "",      // "/astwerk" when served from a subdirectory
 	RelativeURLs: false,   // emit URLs relative to each page
 	Parallel:     false,   // render sibling nodes concurrently
+	Changed:      nil,     // non-empty makes the build incremental
 }
 ```
-
-`Dev` skips the full clean of `OutDir` and overwrites files in place, so a
-running dev server keeps its inodes and open file handles.
 
 `Parallel` fans sibling nodes out across goroutines, bounded by `GOMAXPROCS`.
 Output and error reporting are identical either way — errors are collected by
@@ -213,6 +207,25 @@ time. It's opt-in because it runs your `Page`, `Files` and `Generate` functions
 concurrently: rendering templ components is safe, a `Generate` closure appending
 to a captured slice is not. `CompileScripts` is always parallel; each `.wasm` is
 built by its own `go build` process, so there's nothing of yours to race.
+
+### Sitemap
+
+`ssg.URLs(root)` lists every page path; `ssg.Sitemap` renders `sitemap.xml`:
+
+```go
+urls := ssg.URLs(tree)
+tree.Files = map[string]ssg.PageFunc{
+	"sitemap.xml": ssg.Static(func() templ.Component {
+		return ssg.Sitemap(urls, ssg.SitemapOptions{
+			BaseURL: "https://example.com",
+			LastMod: func(path string) time.Time { return modified[path] }, // optional
+		})
+	}),
+}
+```
+
+`LastMod` emits `<lastmod>` (RFC 3339); a zero time omits it for that page.
+`URLs` calls `Generate`, so a collection-backed site loads its content twice.
 
 ---
 
@@ -235,6 +248,8 @@ func Chunk[T any](items []T, size int) [][]T       // for paging a long collecti
 
 func MustLoadCollection[T any](dir string) Collection[T]      // panics; package-level value
 func MustLoadCollectionTree[T any](dir string) Collection[T]
+func MustLoadCollectionWith[T any](l *Loader, dir string) Collection[T]
+func MustLoadCollectionTreeWith[T any](l *Loader, dir string) Collection[T]
 func LoadData[T any](path string) (T, error)                  // one .json/.toml file
 func MustLoadData[T any](path string) T
 func ParseData[T any](data []byte, format string) (T, error)
@@ -261,6 +276,14 @@ Register components on a loader (`content.NewLoader(nil).WithComponents(cs)`);
 {{@figure("img/a.png", "Caption")}}
 ```
 
+To make external links open in a new tab without post-processing the HTML:
+
+```go
+l := content.NewLoader(nil).WithRenderOptions(content.WithExternalLinks("_blank"))
+```
+
+It covers markdown links and raw HTML; code blocks are untouched.
+
 For data that is not content, `LoadData` is the whole API. A typed package
 variable is the global-state pattern — loaded once, used from any template:
 
@@ -271,6 +294,14 @@ var Posts = content.MustLoadCollectionTree[Post]("content/posts")
 
 `MustLoad*` panics at start-up; the non-`Must` loaders return an error.
 `Collection` also has `Len`, `Each`, `First` and `Get` for the common loops.
+`NodesWith` generates nodes with `Title` and `DependsOn` filled in:
+
+```go
+posts.NodesWith(content.NodeOptions[Post]{
+	Page:  func(c ssg.Ctx, it content.Item[Post]) templ.Component { return src.PostPage(c, it) },
+	Title: func(it content.Item[Post]) string { return it.Meta.Title },
+})
+```
 
 Combined with `Generate`, that's a collection — one index page plus one page
 per file, with no path arithmetic anywhere:
@@ -348,6 +379,10 @@ for _, e := range entries {
   `RequireMeta` drops them.
 - `Options` also covers a custom sidecar name, include/exclude globs and skipped
   directories.
+
+`assets.NewIndex(entries, assets.IndexOptions[T]{...})` adds the generic library
+behaviour: `Get`, `All`, `Tags`, `Len`, duplicate-ID errors and a `Validate`
+hook. The key defaults to the file name; use `File.Path` for path IDs.
 
 Two seams keep it adaptable: `Options.Sidecar` replaces the sidecar lookup
 (per-directory metadata, inheritance, a different file, a remote source), and
@@ -447,13 +482,13 @@ root would also try to compile the script for the host platform.
 
 ## `devserver` — watch, rebuild, reload
 
-The loop you leave running while you work. Only `Build` is required:
+The loop you leave running while you work. Set `Build` or `BuildChanged`:
 
 ```go
 devserver.Run(context.Background(), devserver.Config{
 	Build: devserver.Steps(
 		devserver.Command("templ", "generate"),
-		devserver.Command("go", "run", ".", "--dev"),
+		devserver.Command("go", "run", ".", "--out", "build"),
 	),
 })
 ```
@@ -463,6 +498,24 @@ devserver.Run(context.Background(), devserver.Config{
 2026/07/30 23:28:12 changed: templates/layout.templ, rebuilding
 2026/07/30 23:28:15 rebuilt in 3.701s, reloading
 ```
+
+For incremental builds, `BuildChanged` receives the paths the watcher saw and
+whether a full rebuild is required (initial build, or a file was removed):
+
+```go
+devserver.Run(context.Background(), devserver.Config{
+	BuildChanged: func(changed []string, full bool) error {
+		opts := ssg.BuildOptions{OutDir: "build"}
+		if !full {
+			opts.Changed = changed
+		}
+		return ssg.Build(tree, opts)
+	},
+})
+```
+
+Set exactly one of `Build` and `BuildChanged`. The paths are relative to the
+working directory when `Watch` is, so they feed `BuildOptions.Changed` directly.
 
 **`Build` has to run out of process.** A running Go program cannot load new
 code, so a `Build` closure that calls your render functions directly keeps
@@ -481,15 +534,16 @@ is written into the build output. A failed build doesn't stop the server: the
 error is logged and shown in the browser as an overlay, and the next successful
 build clears it.
 
-Pass `--dev` to the inner build, so a rebuild overwrites in place instead of
-removing the directory out from under a browser mid-request.
+A full rebuild starts from an empty output directory; an incremental build
+(`BuildOptions.Changed`) leaves the previous output in place, so only the
+affected pages are rewritten.
 
 The watcher polls file size and modification time (300ms by default, configurable
 via `Interval`) rather than using OS file events. That keeps the dependency list
 at templ, goldmark and toml — which is the whole pitch — and costs a sub-second
-delay before a rebuild starts. `devserver` imports nothing from `ssg`: you hand
-it a `func() error`, so a build that does more than call `ssg.Build` gets the
-same loop with no extra plumbing.
+delay before a rebuild starts. `devserver` imports nothing from `ssg`: `Build`
+makes it a general watch-rebuild-reload loop, and `BuildChanged` adds the
+incremental path without a second snapshot in the site.
 
 ---
 

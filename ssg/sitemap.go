@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/a-h/templ"
 )
@@ -45,6 +46,13 @@ type SitemapOptions struct {
 	// full origin plus base path, not BuildOptions.BaseURL (which is only the
 	// deployment path).
 	BaseURL string
+
+	// LastMod, when set, supplies the last modification time for a site path
+	// ("" for the home page). A zero time omits <lastmod> for that page. The
+	// callback can read a map built while loading content:
+	//
+	//	LastMod: func(path string) time.Time { return modified[path] },
+	LastMod func(path string) time.Time
 }
 
 // Sitemap renders a sitemap.xml for the given site paths, usually
@@ -59,8 +67,8 @@ type SitemapOptions struct {
 //	}
 //
 // Only pages (nodes with Page) belong in a sitemap, so a sitemap stored in
-// Files does not list itself. v1 emits <loc> only: no lastmod, changefreq,
-// priority or locale alternates.
+// Files does not list itself. v1 emits <loc> and, with [SitemapOptions.LastMod],
+// <lastmod>; no changefreq, priority or locale alternates.
 func Sitemap(urls []string, opts SitemapOptions) templ.Component {
 	base := strings.TrimSuffix(opts.BaseURL, "/")
 	return templ.ComponentFunc(func(_ context.Context, w io.Writer) error {
@@ -78,7 +86,17 @@ func Sitemap(urls []string, opts SitemapOptions) templ.Component {
 			if err := xml.EscapeText(w, []byte(loc)); err != nil {
 				return err
 			}
-			if _, err := io.WriteString(w, "</loc></url>\n"); err != nil {
+			if _, err := io.WriteString(w, "</loc>"); err != nil {
+				return err
+			}
+			if opts.LastMod != nil {
+				if t := opts.LastMod(path); !t.IsZero() {
+					if _, err := io.WriteString(w, "<lastmod>"+t.UTC().Format(time.RFC3339)+"</lastmod>"); err != nil {
+						return err
+					}
+				}
+			}
+			if _, err := io.WriteString(w, "</url>\n"); err != nil {
 				return err
 			}
 		}

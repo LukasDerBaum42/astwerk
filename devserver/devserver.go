@@ -15,24 +15,23 @@
 //	func main() {
 //		flag.Parse()
 //		if !*serve {
-//			build(*dev)   // the one-shot build; also what --serve shells out to
+//			build()   // the one-shot build; also what --serve shells out to
 //			return
 //		}
 //		devserver.Run(context.Background(), devserver.Config{
 //			Build: devserver.Steps(
 //				devserver.Command("templ", "generate"),
-//				devserver.Command("go", "run", ".", "--out", "build", "--dev"),
+//				devserver.Command("go", "run", ".", "--out", "build"),
 //			),
 //		})
 //	}
 //
-// Have that inner build set [ssg.BuildOptions.Dev], so the output directory is
-// overwritten in place rather than removed and recreated — a browser fetching
-// an asset mid-rebuild then never sees a missing file.
+// For data-only incremental rebuilds, use [Config.BuildChanged]: it receives
+// the watched paths and the full-build flag, so the inner build can pass
+// BuildOptions.Changed.
 //
 // [ssg]: https://pkg.go.dev/github.com/LukasDerBaum42/astwerk/ssg
 // [ssg.Build]: https://pkg.go.dev/github.com/LukasDerBaum42/astwerk/ssg#Build
-// [ssg.BuildOptions.Dev]: https://pkg.go.dev/github.com/LukasDerBaum42/astwerk/ssg#BuildOptions
 package devserver
 
 import (
@@ -67,7 +66,8 @@ var DefaultExts = []string{
 // the next one.
 var DefaultIgnore = []string{".git", "node_modules", ".cache", "vendor"}
 
-// Config describes one dev server. Every field except Build has a default.
+// Config describes one dev server. Every field except Build or BuildChanged has
+// a default.
 type Config struct {
 	// Build regenerates the site. It is required, and it is called once before
 	// the server starts listening, so a broken build is reported immediately
@@ -83,13 +83,33 @@ type Config struct {
 	//
 	//	Build: devserver.Steps(
 	//		devserver.Command("templ", "generate"),
-	//		devserver.Command("go", "run", ".", "--out", "build", "--dev"),
+	//		devserver.Command("go", "run", ".", "--out", "build"),
 	//	)
 	//
 	// An in-process closure is correct only when everything the build reads is
 	// data — markdown, CSS, images — and never compiled Go. It is faster, and
 	// it is a trap the moment a .templ file enters the picture.
 	Build func() error
+
+	// BuildChanged is an alternative to Build for incremental builds. When set,
+	// it is called instead of Build with the paths added, modified or removed
+	// since the last build. full is true for the initial build and whenever a
+	// file was removed, since an incremental build leaves stale output behind.
+	//
+	// The paths are as the watcher walked them — relative to the working
+	// directory when Watch is relative — so they drop straight into
+	// [ssg.BuildOptions.Changed]:
+	//
+	//	BuildChanged: func(changed []string, full bool) error {
+	//		opts := ssg.BuildOptions{OutDir: "build"}
+	//		if !full {
+	//			opts.Changed = changed
+	//		}
+	//		return ssg.Build(tree, opts)
+	//	},
+	//
+	// Set exactly one of Build and BuildChanged.
+	BuildChanged func(changed []string, full bool) error
 
 	// Dir is the directory to serve. Defaults to [DefaultDir].
 	Dir string
@@ -142,8 +162,11 @@ type Config struct {
 }
 
 func (c *Config) applyDefaults() error {
-	if c.Build == nil {
-		return errors.New("devserver: Config.Build is required")
+	if c.Build == nil && c.BuildChanged == nil {
+		return errors.New("devserver: Config.Build or Config.BuildChanged is required")
+	}
+	if c.Build != nil && c.BuildChanged != nil {
+		return errors.New("devserver: set only one of Config.Build and Config.BuildChanged")
 	}
 	if c.Dir == "" {
 		c.Dir = DefaultDir
@@ -191,7 +214,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// The first build is reported but not fatal: a project with a broken build
 	// still wants the server up, showing the error, so fixing it reloads.
 	lg.event(colorCyan, tagStart, "initial build")
-	runBuild(cfg, lg, hub)
+	runBuild(cfg, lg, hub, nil, true)
 
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
@@ -243,11 +266,16 @@ func Run(ctx context.Context, cfg Config) error {
 
 // runBuild runs one build, timing it and reporting the outcome to both the log
 // and the browser.
-func runBuild(cfg Config, lg *logger, hub *hub) (ok bool) {
+func runBuild(cfg Config, lg *logger, hub *hub, changed []string, full bool) (ok bool) {
 	lg.event(colorYellow, tagBuild, "building")
 
 	start := time.Now()
-	err := cfg.Build()
+	var err error
+	if cfg.BuildChanged != nil {
+		err = cfg.BuildChanged(changed, full)
+	} else {
+		err = cfg.Build()
+	}
 	elapsed := time.Since(start).Round(time.Millisecond)
 
 	if err != nil {
@@ -322,7 +350,7 @@ func watchLoop(ctx context.Context, cfg Config, lg *logger, hub *hub) {
 		}
 
 		logChanges(lg, found)
-		ok := runBuild(cfg, lg, hub)
+		ok := runBuild(cfg, lg, hub, found.paths(), len(found.removed) > 0)
 
 		// Adopt whatever the build itself touched before looking again. A build
 		// that writes inside a watched directory — templ generate producing

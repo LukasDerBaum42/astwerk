@@ -19,7 +19,8 @@ const DefaultOutDir = "build"
 
 // Build walks the tree from root and writes the whole site to opts.OutDir.
 //
-// Unless opts.Dev is set, OutDir is removed first so the build starts clean.
+// Unless the build is incremental, OutDir is removed first so the build starts
+// clean.
 //
 // For each node, at its resolved output path p:
 //
@@ -42,7 +43,7 @@ func Build(root Node, opts BuildOptions) error {
 		opts.OutDir = DefaultOutDir
 	}
 	cs := normalizeChanged(opts.Changed)
-	if !opts.Dev && !cs.incremental() {
+	if !cs.incremental() {
 		if err := os.RemoveAll(opts.OutDir); err != nil {
 			return fmt.Errorf("ssg: clean %s: %w", opts.OutDir, err)
 		}
@@ -102,7 +103,7 @@ func buildNode(n Node, dir, sitePath string, loc *localeCtx, data any, opts Buil
 
 	if affected {
 		if n.Page != nil {
-			if err := renderFile(filepath.Join(dir, "index.html"), n.Page(ctx), opts.Dev); err != nil {
+			if err := renderFile(filepath.Join(dir, "index.html"), n.Page(ctx)); err != nil {
 				return err
 			}
 		}
@@ -119,13 +120,13 @@ func buildNode(n Node, dir, sitePath string, loc *localeCtx, data any, opts Buil
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				return fmt.Errorf("ssg: create %s: %w", filepath.Dir(path), err)
 			}
-			if err := renderFile(path, fn(ctx), opts.Dev); err != nil {
+			if err := renderFile(path, fn(ctx)); err != nil {
 				return err
 			}
 		}
 
 		if n.CopyFrom != "" {
-			if err := devCopyFS(dir, os.DirFS(n.CopyFrom), opts.Dev); err != nil {
+			if err := copyFS(dir, os.DirFS(n.CopyFrom)); err != nil {
 				return fmt.Errorf("ssg: copy %s -> %s: %w", n.CopyFrom, dir, err)
 			}
 		}
@@ -253,11 +254,11 @@ func joinPath(base, key string) string {
 }
 
 // renderFile renders c into path, creating or truncating it per dev mode.
-func renderFile(path string, c templ.Component, dev bool) error {
+func renderFile(path string, c templ.Component) error {
 	if c == nil {
 		return fmt.Errorf("ssg: nil component for %s", path)
 	}
-	f, err := devCreate(path, dev)
+	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("ssg: create %s: %w", path, err)
 	}

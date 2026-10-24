@@ -232,14 +232,10 @@ type BuildOptions struct {
 	// OutDir is the output directory. Defaults to "build".
 	OutDir string
 
-	// Dev skips the full clean of OutDir and overwrites files in place,
-	// so a running dev server keeps its inodes and open handles.
-	Dev bool
-
 	// Changed makes a build incremental. When non-empty, only nodes whose
 	// [Node.DependsOn] intersects this list are rebuilt; everything else is left
-	// untouched, and OutDir is not cleaned (as with Dev). Pass nil (or an empty
-	// slice) for a full build.
+	// untouched, and OutDir is not cleaned. Pass nil (or an empty slice) for a
+	// full build, which starts from an empty OutDir.
 	//
 	// A node whose Generate runs in response to a change must list the files or
 	// directory its Generate reads in its own DependsOn, so the change marks it

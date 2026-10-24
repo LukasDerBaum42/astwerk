@@ -183,7 +183,7 @@ func TestBuildCopyFromAndNestedKeys(t *testing.T) {
 	}
 }
 
-func TestBuildCleansUnlessDev(t *testing.T) {
+func TestBuildCleansUnlessIncremental(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "build")
 	if err := os.MkdirAll(out, 0755); err != nil {
 		t.Fatal(err)
@@ -193,18 +193,18 @@ func TestBuildCleansUnlessDev(t *testing.T) {
 
 	root := Node{Page: text("home")}
 
-	if err := Build(root, BuildOptions{OutDir: out, Dev: true}); err != nil {
+	if err := Build(root, BuildOptions{OutDir: out, Changed: []string{"changed.md"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(stale); err != nil {
-		t.Errorf("dev build removed %s: %v", stale, err)
+		t.Errorf("incremental build removed %s: %v", stale, err)
 	}
 
 	if err := Build(root, BuildOptions{OutDir: out}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Errorf("non-dev build kept %s", stale)
+		t.Errorf("full build kept %s", stale)
 	}
 }
 

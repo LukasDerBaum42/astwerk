@@ -51,6 +51,16 @@ func (c changes) empty() bool { return c.count() == 0 }
 
 func (c changes) count() int { return len(c.added) + len(c.modified) + len(c.removed) }
 
+// paths returns every changed path in sorted order, for a build callback.
+func (c changes) paths() []string {
+	out := make([]string, 0, c.count())
+	out = append(out, c.added...)
+	out = append(out, c.modified...)
+	out = append(out, c.removed...)
+	sort.Strings(out)
+	return out
+}
+
 // first names one path for a one-line summary, preferring a modification since
 // that is what an edit-save-look loop is usually about.
 func (c changes) first() string {

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/a-h/templ"
 )
@@ -58,6 +59,32 @@ func TestSitemap(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("sitemap missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestSitemapLastMod(t *testing.T) {
+	modified := time.Date(2026, 10, 21, 12, 30, 0, 0, time.UTC)
+	c := Sitemap([]string{"", "about/"}, SitemapOptions{
+		BaseURL: "https://example.com",
+		LastMod: func(path string) time.Time {
+			if path == "about/" {
+				return modified
+			}
+			return time.Time{}
+		},
+	})
+
+	var b strings.Builder
+	if err := c.Render(context.Background(), &b); err != nil {
+		t.Fatal(err)
+	}
+	got := b.String()
+
+	if !strings.Contains(got, `<url><loc>https://example.com/about/</loc><lastmod>2026-10-21T12:30:00Z</lastmod></url>`) {
+		t.Errorf("sitemap missing lastmod:\n%s", got)
+	}
+	if strings.Contains(got, `<loc>https://example.com/</loc><lastmod>`) {
+		t.Errorf("zero lastmod should be omitted:\n%s", got)
 	}
 }
 

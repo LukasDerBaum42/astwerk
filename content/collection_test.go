@@ -240,6 +240,50 @@ func TestMustLoadCollection(t *testing.T) {
 	}
 }
 
+func TestNodesWith(t *testing.T) {
+	col := Collection[post]{Items: []Item[post]{
+		{Slug: "a", Meta: post{Title: "A"}},
+		{Slug: "2024/b", Meta: post{Title: "B"}},
+	}}
+
+	nodes := col.NodesWith(NodeOptions[post]{
+		Page: func(c ssg.Ctx, it Item[post]) templ.Component {
+			return templ.Raw(it.Slug)
+		},
+		Title: func(it Item[post]) string { return it.Meta.Title },
+		DependsOn: func(it Item[post]) []string {
+			return []string{"content/" + it.Slug + ".md"}
+		},
+	})
+
+	a, ok := nodes["a"]
+	if !ok {
+		t.Fatalf("missing a: %v", slugsOfKeys(nodes))
+	}
+	if a.Title != "A" {
+		t.Errorf("Title = %q", a.Title)
+	}
+	if !reflect.DeepEqual(a.DependsOn, []string{"content/a.md"}) {
+		t.Errorf("DependsOn = %v", a.DependsOn)
+	}
+	if got := renderNode(t, a); got != "a" {
+		t.Errorf("page = %q", got)
+	}
+	if _, ok := nodes["2024/b"]; !ok {
+		t.Errorf("nested slug missing: %v", slugsOfKeys(nodes))
+	}
+}
+
+func TestMustLoadCollectionWith(t *testing.T) {
+	dir := writeCollection(t, map[string]string{
+		"a.md": "+++\nTitle = \"A\"\n+++\n",
+	})
+	col := MustLoadCollectionWith[post](NewLoader(nil), dir)
+	if col.Len() != 1 {
+		t.Errorf("Len = %d", col.Len())
+	}
+}
+
 func TestCollectionChunkEmpty(t *testing.T) {
 	var col Collection[post]
 	if got := col.Chunk(3); got != nil {

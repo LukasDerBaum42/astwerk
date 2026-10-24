@@ -108,6 +108,51 @@ func TestComponentThreeArgs(t *testing.T) {
 	}
 }
 
+func TestExternalLinks(t *testing.T) {
+	l := NewLoader(nil).WithRenderOptions(WithExternalLinks("_blank"))
+	p, err := l.Parse("[Ext](https://example.com) [Int](/about/) <a href=\"//cdn.example.com/x\">cdn</a>\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := renderPage(t, p, ssg.Ctx{})
+
+	if !strings.Contains(got, `href="https://example.com" target="_blank" rel="noopener noreferrer"`) {
+		t.Errorf("external markdown link = %q", got)
+	}
+	if strings.Contains(got, `href="/about/" target=`) {
+		t.Errorf("internal link was externalized: %q", got)
+	}
+	if !strings.Contains(got, `href="//cdn.example.com/x" target="_blank"`) {
+		t.Errorf("protocol-relative link = %q", got)
+	}
+}
+
+func TestExternalLinksExistingTarget(t *testing.T) {
+	l := NewLoader(nil).WithRenderOptions(WithExternalLinks("_blank"))
+	p, err := l.Parse(`<a href="https://x" target="_self">x</a>` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := renderPage(t, p, ssg.Ctx{})
+	if strings.Contains(got, "_blank") {
+		t.Errorf("existing target was overwritten: %q", got)
+	}
+	if !strings.Contains(got, `target="_self"`) {
+		t.Errorf("output = %q", got)
+	}
+}
+
+func TestExternalLinksCodeBlock(t *testing.T) {
+	l := NewLoader(nil).WithRenderOptions(WithExternalLinks("_blank"))
+	p, err := l.Parse("```\n<a href=\"https://x\">x</a>\n```\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := renderPage(t, p, ssg.Ctx{}); strings.Contains(got, "target=") {
+		t.Errorf("code block was rewritten: %q", got)
+	}
+}
+
 func TestComponentInline(t *testing.T) {
 	l := NewLoader(nil).WithComponents(testComponents())
 	p, err := l.Parse("Before {{@note(hello)}} after.\n")

@@ -81,6 +81,7 @@ func DefaultMarkdown() goldmark.Markdown {
 type Loader struct {
 	markdown   goldmark.Markdown
 	components *Components
+	render     RenderOptions
 }
 
 // NewLoader returns a Loader using md. A nil md means [DefaultMarkdown].
